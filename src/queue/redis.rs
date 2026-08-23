@@ -48,7 +48,7 @@ impl RedisConsumer {
         };
 
         // Create consumer group if it doesn't exist
-        let _: Result<(), _> = con.xgroup_create(&self.stream_key, &self.consumer_group, "$");
+        let _: Result<(), _> = con.xgroup_create_mkstream(&self.stream_key, &self.consumer_group, "$");
         // Ignore BUSYGROUP errors
 
         tracing::info!(
@@ -61,29 +61,32 @@ impl RedisConsumer {
         loop {
             // Read messages from consumer group
             let opts = StreamReadOptions::default()
+                .group(&self.consumer_group, &self.consumer_name)
                 .count(10)
                 .block(2000);
 
-            let response: Result<Vec<(String, Vec<(String, Vec<(String, String)>)>)>, _> =
+            let response: Result<redis::streams::StreamReadReply, _> =
                 con.xread_options(&[&self.stream_key], &[">"], &opts);
 
             match response {
-                Ok(messages) => {
-                    for (_, stream_messages) in messages {
-                        for (msg_id, fields) in stream_messages {
-                            // Parse job from Redis fields
-                            let mut job_data = std::collections::HashMap::new();
-                            for (key, value) in fields {
-                                job_data.insert(key, value);
-                            }
+                Ok(reply) => {
+                    for stream_key in reply.keys {
+                        for stream_id in stream_key.ids {
+                            let msg_id = stream_id.id;
+                            
+                            // Check for "job" field in message map
+                            let job_json = match stream_id.map.get("job") {
+                                Some(redis::Value::Data(bytes)) => std::str::from_utf8(bytes).ok().map(|s| s.to_string()),
+                                Some(redis::Value::Status(s)) => Some(s.clone()),
+                                _ => None,
+                            };
 
-                            // Try to deserialize as JobRequest
-                            if let Some(job_json) = job_data.get("job") {
-                                match serde_json::from_str::<JobRequest>(job_json) {
+                            if let Some(json_str) = job_json {
+                                match serde_json::from_str::<JobRequest>(&json_str) {
                                     Ok(request) => {
                                         tracing::info!("Processing job {} from Redis", request.job_id);
 
-                                        // Execute job
+                                        // Execute job through worker pool
                                         match self.pool.submit(request.clone(), None).await {
                                             Ok(result) => {
                                                 // Write result back to Redis
@@ -94,7 +97,7 @@ impl RedisConsumer {
 
                                                 // Acknowledge message
                                                 let _: Result<(), _> =
-                                                    con.xack(&self.stream_key, &self.consumer_group, &[msg_id]);
+                                                    con.xack(&self.stream_key, &self.consumer_group, &[&msg_id]);
 
                                                 tracing::info!("Job {} completed and result stored", request.job_id);
                                             }
@@ -104,7 +107,7 @@ impl RedisConsumer {
                                         }
                                     }
                                     Err(e) => {
-                                        tracing::error!("Failed to parse job from Redis: {}", e);
+                                        tracing::error!("Failed to parse job JSON from Redis: {}", e);
                                     }
                                 }
                             }
@@ -112,8 +115,7 @@ impl RedisConsumer {
                     }
                 }
                 Err(e) => {
-                    // NOGROUP or other errors
-                    tracing::debug!("Redis read error (may be NOGROUP on first run): {}", e);
+                    tracing::warn!("Redis stream read warning: {}", e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
                 }
             }
