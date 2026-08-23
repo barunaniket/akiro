@@ -50,7 +50,14 @@ impl RedisConsumer {
 
         // Create consumer group if it doesn't exist
         let _: Result<(), _> = con.xgroup_create_mkstream(&self.stream_key, &self.consumer_group, "$");
-        // Ignore BUSYGROUP errors
+
+        // Register consumer explicitly in consumer group
+        let _: Result<(), _> = redis::cmd("XGROUP")
+            .arg("CREATECONSUMER")
+            .arg(&self.stream_key)
+            .arg(&self.consumer_group)
+            .arg(&self.consumer_name)
+            .query(&mut con);
 
         tracing::info!(
             "Redis consumer started: {} on group {} as {}",
@@ -60,6 +67,14 @@ impl RedisConsumer {
         );
 
         loop {
+            // Heartbeat: keep consumer registration fresh in consumer group
+            let _: Result<(), _> = redis::cmd("XGROUP")
+                .arg("CREATECONSUMER")
+                .arg(&self.stream_key)
+                .arg(&self.consumer_group)
+                .arg(&self.consumer_name)
+                .query(&mut con);
+
             // Read messages from consumer group
             let opts = StreamReadOptions::default()
                 .group(&self.consumer_group, &self.consumer_name)
