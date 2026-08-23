@@ -112,6 +112,49 @@ pub async fn health(
     })
 }
 
+async fn submit_to_cluster(
+    redis_url: &str,
+    request: &JobRequest,
+) -> Result<crate::orchestrator::JobResult, Box<dyn std::error::Error + Send + Sync>> {
+    let client = redis::Client::open(redis_url)?;
+    let mut con = client.get_multiplexed_tokio_connection().await?;
+
+    let job_json = serde_json::to_string(request)?;
+    let job_id = request.job_id.clone();
+    let result_key = format!("judge:results:{}", job_id);
+
+    // Publish job into Redis Stream
+    let _: () = redis::cmd("XADD")
+        .arg("judge:jobs")
+        .arg("*")
+        .arg("job")
+        .arg(&job_json)
+        .query_async(&mut con)
+        .await?;
+
+    // Wait for any cluster worker node to pick up and process the job
+    let max_wait_ms = (request.time_limit_ms * request.test_cases.len() as u64 + 20_000).max(10_000);
+    let start = std::time::Instant::now();
+
+    while start.elapsed().as_millis() < max_wait_ms as u128 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
+
+        let res: Option<String> = redis::cmd("GET")
+            .arg(&result_key)
+            .query_async(&mut con)
+            .await?;
+
+        if let Some(json_str) = res {
+            let result: crate::orchestrator::JobResult = serde_json::from_str(&json_str)?;
+            // Clean up result key asynchronously
+            let _: Result<(), _> = redis::cmd("DEL").arg(&result_key).query_async(&mut con).await;
+            return Ok(result);
+        }
+    }
+
+    Err("Job execution timed out waiting for cluster worker response".into())
+}
+
 pub async fn submit(
     State(state): State<Arc<ApiState>>,
     Json(request): Json<JobRequest>,
@@ -135,7 +178,17 @@ pub async fn submit(
         );
     }
 
-    // Submit to worker pool with backpressure protection
+    // If Redis cluster is configured, dispatch across all distributed worker nodes
+    if let Some(ref redis_url) = state.redis_url {
+        match submit_to_cluster(redis_url, &request).await {
+            Ok(result) => return (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+            Err(e) => {
+                tracing::warn!("Cluster queue dispatch error: {}. Falling back to local worker pool.", e);
+            }
+        }
+    }
+
+    // Fallback to local in-memory worker pool
     match state.pool.submit(request, None).await {
         Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap())),
         Err(e) if e == "QUEUE_FULL" => (
