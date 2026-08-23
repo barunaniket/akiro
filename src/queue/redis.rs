@@ -29,7 +29,23 @@ impl RedisConsumer {
 
     pub async fn run(&self) -> Result<(), Box<dyn Error>> {
         let client = redis::Client::open(self.redis_url.as_str())?;
-        let mut con = client.get_connection()?;
+        
+        let mut con = {
+            let mut retries = 0;
+            loop {
+                match client.get_connection() {
+                    Ok(c) => break c,
+                    Err(e) => {
+                        retries += 1;
+                        if retries > 10 {
+                            return Err(Box::new(e));
+                        }
+                        tracing::warn!("Waiting for Redis at {} (attempt {}/10): {}", self.redis_url, retries, e);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        };
 
         // Create consumer group if it doesn't exist
         let _: Result<(), _> = con.xgroup_create(&self.stream_key, &self.consumer_group, "$");

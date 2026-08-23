@@ -61,6 +61,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jdk-headless \
     # SQL (SQLite3)
     sqlite3 \
+    # Embedded Redis Queue
+    redis-server \
     # Utilities
     procps curl ca-certificates unzip iptables \
     && rm -rf /var/lib/apt/lists/*
@@ -111,13 +113,13 @@ RUN chmod +x /entrypoint.sh
 
 # ─── Runtime configuration ───
 ENV RUST_LOG=info
-ENV JUDGE_MODE=server
+ENV JUDGE_MODE=all
 ENV JUDGE_PORT=8080
 
-EXPOSE 8080
+EXPOSE 8080 6379
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -sf http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["--mode", "server"]
+CMD ["--mode", "all"]
