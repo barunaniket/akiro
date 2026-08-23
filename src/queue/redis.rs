@@ -18,12 +18,13 @@ impl RedisConsumer {
         stream_key: Option<String>,
         consumer_group: Option<String>,
     ) -> Self {
+        let workers_count = pool.num_workers();
         Self {
             redis_url,
             pool,
             stream_key: stream_key.unwrap_or_else(|| "judge:jobs".to_string()),
             consumer_group: consumer_group.unwrap_or_else(|| "judge_workers".to_string()),
-            consumer_name: format!("worker-{}", uuid::Uuid::new_v4()),
+            consumer_name: format!("worker-w{}-{}", workers_count, uuid::Uuid::new_v4()),
         }
     }
 

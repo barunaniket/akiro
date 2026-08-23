@@ -81,7 +81,7 @@ async fn run_server(
     });
 
     // Start HTTP server
-    let router = api::create_router(pool, secret);
+    let router = api::create_router(pool, secret, None);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
 
     tracing::info!("HTTP server listening on port {}", port);
@@ -125,8 +125,9 @@ async fn run_all(
 
     // Start HTTP server
     let pool_http = pool.clone();
+    let redis_url_clone = redis_url.to_string();
     tokio::spawn(async move {
-        let router = api::create_router(pool_http, secret);
+        let router = api::create_router(pool_http, secret, Some(redis_url_clone));
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
             .await
             .expect("Failed to bind HTTP listener");

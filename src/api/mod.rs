@@ -18,6 +18,8 @@ use crate::orchestrator::JudgeWorkerPool;
 pub struct ApiState {
     pub pool: Arc<JudgeWorkerPool>,
     pub secret: Option<String>,
+    pub start_time: std::time::Instant,
+    pub redis_url: Option<String>,
 }
 
 async fn auth_middleware(
@@ -49,8 +51,17 @@ async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
-pub fn create_router(pool: Arc<JudgeWorkerPool>, secret: Option<String>) -> Router {
-    let state = Arc::new(ApiState { pool, secret });
+pub fn create_router(
+    pool: Arc<JudgeWorkerPool>,
+    secret: Option<String>,
+    redis_url: Option<String>,
+) -> Router {
+    let state = Arc::new(ApiState {
+        pool,
+        secret,
+        start_time: std::time::Instant::now(),
+        redis_url,
+    });
 
     let protected_routes = Router::new()
         .route("/api/v1/submit", post(handlers::submit))
