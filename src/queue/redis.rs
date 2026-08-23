@@ -52,7 +52,7 @@ impl RedisConsumer {
         let _: Result<(), _> = con.xgroup_create_mkstream(&self.stream_key, &self.consumer_group, "$");
 
         // Register consumer explicitly in consumer group
-        let _: Result<(), _> = redis::cmd("XGROUP")
+        let _: Result<redis::Value, _> = redis::cmd("XGROUP")
             .arg("CREATECONSUMER")
             .arg(&self.stream_key)
             .arg(&self.consumer_group)
@@ -68,7 +68,7 @@ impl RedisConsumer {
 
         loop {
             // Heartbeat: keep consumer registration fresh in consumer group
-            let _: Result<(), _> = redis::cmd("XGROUP")
+            let _: Result<redis::Value, _> = redis::cmd("XGROUP")
                 .arg("CREATECONSUMER")
                 .arg(&self.stream_key)
                 .arg(&self.consumer_group)
