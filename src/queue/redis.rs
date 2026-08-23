@@ -116,8 +116,21 @@ impl RedisConsumer {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Redis stream read warning: {}", e);
+                    tracing::warn!("Redis stream read warning: {}. Attempting to reconnect...", e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+                    // Automatically re-establish connection on broken pipe or disconnect
+                    match client.get_connection() {
+                        Ok(new_con) => {
+                            con = new_con;
+                            tracing::info!("Reconnected to Redis successfully ✓");
+                            // Ensure consumer group exists
+                            let _: Result<(), _> = con.xgroup_create_mkstream(&self.stream_key, &self.consumer_group, "$");
+                        }
+                        Err(reconn_err) => {
+                            tracing::debug!("Redis reconnection attempt failed: {}", reconn_err);
+                        }
+                    }
                 }
             }
         }
