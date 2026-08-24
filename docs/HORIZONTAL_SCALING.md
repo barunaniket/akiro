@@ -73,7 +73,7 @@ docker run -d \
   --privileged \
   --restart unless-stopped \
   -e JUDGE_MODE=worker \
-  -e JUDGE_REDIS=redis://:ceef3470b081d9f851ea3acc65efc4a0fd61f65d3d426998f49f57e37a945e5f@host.docker.internal:6380 \
+  -e JUDGE_REDIS=redis://:<JUDGE_SECRET>@host.docker.internal:6380 \
   -e JUDGE_WORKERS=8 \
   akiro:latest
 ```
@@ -98,7 +98,7 @@ If connecting a secondary cloud instance (e.g. AWS EC2, GCP Compute Engine, Hetz
      --privileged \
      --restart unless-stopped \
      -e JUDGE_MODE=worker \
-     -e JUDGE_REDIS=redis://:ceef3470b081d9f851ea3acc65efc4a0fd61f65d3d426998f49f57e37a945e5f@20.219.186.217:6379 \
+     -e JUDGE_REDIS=redis://:<JUDGE_SECRET>@20.219.186.217:6379 \
      -e JUDGE_WORKERS=auto \
      akiro:latest
    ```
@@ -134,7 +134,7 @@ INFO akiro::queue::redis: Redis consumer started: judge:jobs on group judge_work
 ### 2. Check Active Consumers on the Leader Node
 On the Azure Leader VM:
 ```bash
-sudo docker exec judge-server redis-cli -a ceef3470b081d9f851ea3acc65efc4a0fd61f65d3d426998f49f57e37a945e5f XINFO CONSUMERS judge:jobs judge_workers
+sudo docker exec judge-server redis-cli -a <JUDGE_SECRET> XINFO CONSUMERS judge:jobs judge_workers
 ```
 This lists all active worker nodes connected across the cluster and their current idle/active state.
 
