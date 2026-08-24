@@ -1,4 +1,3 @@
-use redis::{streams::StreamReadOptions, Commands};
 use std::sync::Arc;
 use std::error::Error;
 use crate::orchestrator::{JobRequest, JudgeWorkerPool};
@@ -31,10 +30,10 @@ impl RedisConsumer {
     pub async fn run(&self) -> Result<(), Box<dyn Error>> {
         let client = redis::Client::open(self.redis_url.as_str())?;
         
-        let mut con = {
+        let mut async_con = {
             let mut retries = 0;
             loop {
-                match client.get_connection() {
+                match client.get_multiplexed_tokio_connection().await {
                     Ok(c) => break c,
                     Err(e) => {
                         retries += 1;
@@ -49,7 +48,14 @@ impl RedisConsumer {
         };
 
         // Create consumer group if it doesn't exist
-        let _: Result<(), _> = con.xgroup_create_mkstream(&self.stream_key, &self.consumer_group, "$");
+        let _: Result<redis::Value, _> = redis::cmd("XGROUP")
+            .arg("CREATE")
+            .arg(&self.stream_key)
+            .arg(&self.consumer_group)
+            .arg("$")
+            .arg("MKSTREAM")
+            .query_async(&mut async_con)
+            .await;
 
         // Register consumer explicitly in consumer group
         let _: Result<redis::Value, _> = redis::cmd("XGROUP")
@@ -57,13 +63,19 @@ impl RedisConsumer {
             .arg(&self.stream_key)
             .arg(&self.consumer_group)
             .arg(&self.consumer_name)
-            .query(&mut con);
+            .query_async(&mut async_con)
+            .await;
+
+        let num_workers = self.pool.num_workers();
+        // Allow up to 2x num_workers inflight jobs to keep all CPU cores 100% saturated
+        let semaphore = Arc::new(tokio::sync::Semaphore::new((num_workers * 2).max(4)));
 
         tracing::info!(
-            "Redis consumer started: {} on group {} as {}",
+            "Redis concurrent consumer started: {} on group {} as {} (capacity: {} workers)",
             self.stream_key,
             self.consumer_group,
-            self.consumer_name
+            self.consumer_name,
+            num_workers
         );
 
         loop {
@@ -73,74 +85,128 @@ impl RedisConsumer {
                 .arg(&self.stream_key)
                 .arg(&self.consumer_group)
                 .arg(&self.consumer_name)
-                .query(&mut con);
+                .query_async(&mut async_con)
+                .await;
 
-            // Read messages from consumer group
-            let opts = StreamReadOptions::default()
-                .group(&self.consumer_group, &self.consumer_name)
-                .count(10)
-                .block(2000);
+            // Determine how many jobs we can fetch without overwhelming the worker pool
+            let available = semaphore.available_permits().max(1);
+            let batch_size = available.min(num_workers.max(4));
 
-            let response: Result<redis::streams::StreamReadReply, _> =
-                con.xread_options(&[&self.stream_key], &[">"], &opts);
+            let read_cmd = redis::cmd("XREADGROUP")
+                .arg("GROUP")
+                .arg(&self.consumer_group)
+                .arg(&self.consumer_name)
+                .arg("BLOCK")
+                .arg(2000)
+                .arg("COUNT")
+                .arg(batch_size)
+                .arg("STREAMS")
+                .arg(&self.stream_key)
+                .arg(">")
+                .query_async(&mut async_con)
+                .await;
 
-            match response {
-                Ok(reply) => {
-                    for stream_key in reply.keys {
-                        for stream_id in stream_key.ids {
-                            let msg_id = stream_id.id;
-                            
-                            // Check for "job" field in message map
-                            let job_json = match stream_id.map.get("job") {
-                                Some(redis::Value::Data(bytes)) => std::str::from_utf8(bytes).ok().map(|s| s.to_string()),
-                                Some(redis::Value::Status(s)) => Some(s.clone()),
-                                _ => None,
-                            };
+            match read_cmd {
+                Ok(redis::Value::Bulk(keys)) => {
+                    for key_item in keys {
+                        if let redis::Value::Bulk(key_fields) = key_item {
+                            if key_fields.len() >= 2 {
+                                if let redis::Value::Bulk(messages) = &key_fields[1] {
+                                    for msg in messages {
+                                        if let redis::Value::Bulk(msg_data) = msg {
+                                            if msg_data.len() >= 2 {
+                                                let msg_id = match &msg_data[0] {
+                                                    redis::Value::Data(id_bytes) => String::from_utf8_lossy(id_bytes).to_string(),
+                                                    _ => continue,
+                                                };
 
-                            if let Some(json_str) = job_json {
-                                match serde_json::from_str::<JobRequest>(&json_str) {
-                                    Ok(request) => {
-                                        tracing::info!("Processing job {} from Redis", request.job_id);
+                                                let mut job_json: Option<String> = None;
+                                                if let redis::Value::Bulk(kvs) = &msg_data[1] {
+                                                    let mut iter = kvs.iter();
+                                                    while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
+                                                        if let redis::Value::Data(k_bytes) = k {
+                                                            if String::from_utf8_lossy(k_bytes) == "job" {
+                                                                if let redis::Value::Data(v_bytes) = v {
+                                                                    job_json = Some(String::from_utf8_lossy(v_bytes).to_string());
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
 
-                                        // Execute job through worker pool
-                                        match self.pool.submit(request.clone(), None).await {
-                                            Ok(result) => {
-                                                // Write result back to Redis
-                                                let result_key = format!("judge:results:{}", request.job_id);
-                                                let result_json = serde_json::to_string(&result).unwrap_or_default();
-                                                let _: Result<(), _> =
-                                                    con.set_ex(&result_key, result_json, 86400); // 24h TTL
+                                                if let Some(json_str) = job_json {
+                                                    match serde_json::from_str::<JobRequest>(&json_str) {
+                                                        Ok(request) => {
+                                                            let permit = match semaphore.clone().try_acquire_owned() {
+                                                                Ok(p) => p,
+                                                                Err(_) => match semaphore.clone().acquire_owned().await {
+                                                                    Ok(p) => p,
+                                                                    Err(_) => continue,
+                                                                },
+                                                            };
 
-                                                // Acknowledge message
-                                                let _: Result<(), _> =
-                                                    con.xack(&self.stream_key, &self.consumer_group, &[&msg_id]);
+                                                            let pool = self.pool.clone();
+                                                            let mut task_con = async_con.clone();
+                                                            let stream_key = self.stream_key.clone();
+                                                            let consumer_group = self.consumer_group.clone();
 
-                                                tracing::info!("Job {} completed and result stored", request.job_id);
-                                            }
-                                            Err(e) => {
-                                                tracing::error!("Job {} failed: {}", request.job_id, e);
+                                                            tokio::spawn(async move {
+                                                                tracing::info!("Processing job {} concurrently from Redis", request.job_id);
+
+                                                                match pool.submit(request.clone(), None).await {
+                                                                    Ok(result) => {
+                                                                        let result_key = format!("judge:results:{}", request.job_id);
+                                                                        let result_json = serde_json::to_string(&result).unwrap_or_default();
+                                                                        
+                                                                        let _: Result<(), _> = redis::cmd("SET")
+                                                                            .arg(&result_key)
+                                                                            .arg(&result_json)
+                                                                            .arg("EX")
+                                                                            .arg(86400)
+                                                                            .query_async(&mut task_con)
+                                                                            .await;
+
+                                                                        let _: Result<(), _> = redis::cmd("XACK")
+                                                                            .arg(&stream_key)
+                                                                            .arg(&consumer_group)
+                                                                            .arg(&msg_id)
+                                                                            .query_async(&mut task_con)
+                                                                            .await;
+
+                                                                        tracing::info!("Job {} completed and result stored", request.job_id);
+                                                                    }
+                                                                    Err(e) => {
+                                                                        tracing::error!("Job {} failed: {}", request.job_id, e);
+                                                                    }
+                                                                }
+                                                                drop(permit);
+                                                            });
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::error!("Failed to parse job JSON from Redis: {}", e);
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to parse job JSON from Redis: {}", e);
                                     }
                                 }
                             }
                         }
                     }
                 }
+                Ok(redis::Value::Nil) => {
+                    // Timeout with no messages, normal loop
+                }
+                Ok(_) => {}
                 Err(e) => {
                     tracing::warn!("Redis stream read warning: {}. Attempting to reconnect...", e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-                    // Automatically re-establish connection on broken pipe or disconnect
-                    match client.get_connection() {
+                    match client.get_multiplexed_tokio_connection().await {
                         Ok(new_con) => {
-                            con = new_con;
+                            async_con = new_con;
                             tracing::info!("Reconnected to Redis successfully ✓");
-                            // Ensure consumer group exists
-                            let _: Result<(), _> = con.xgroup_create_mkstream(&self.stream_key, &self.consumer_group, "$");
                         }
                         Err(reconn_err) => {
                             tracing::debug!("Redis reconnection attempt failed: {}", reconn_err);

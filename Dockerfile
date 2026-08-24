@@ -109,7 +109,7 @@ RUN mkdir -p /sys/fs/cgroup/judge 2>/dev/null || true
 
 # ─── Create entrypoint that sets up cgroups at container start ───
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # ─── Runtime configuration ───
 ENV RUST_LOG=info
