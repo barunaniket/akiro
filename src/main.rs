@@ -25,9 +25,13 @@ struct Args {
     #[arg(long, env = "JUDGE_PORT", default_value = "8080")]
     port: u16,
 
-    /// Optional API secret key or cluster token for authentication
-    #[arg(long, alias = "token", env = "CLUSTER_TOKEN")]
+    /// Optional API secret key for securing HTTP endpoints
+    #[arg(long, env = "JUDGE_SECRET")]
     secret: Option<String>,
+
+    /// Optional cluster token for securing Redis broker / worker connections
+    #[arg(long, env = "CLUSTER_TOKEN")]
+    token: Option<String>,
 
     /// Number of worker threads (auto-detect if not set)
     #[arg(long, env = "JUDGE_WORKERS")]
