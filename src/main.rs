@@ -33,9 +33,9 @@ struct Args {
     #[arg(long, env = "CLUSTER_TOKEN")]
     token: Option<String>,
 
-    /// Number of worker threads (auto-detect if not set)
+    /// Number of worker threads (e.g. 8, auto)
     #[arg(long, env = "JUDGE_WORKERS")]
-    workers: Option<usize>,
+    workers: Option<String>,
 
     /// Redis connection string for queue consumer
     #[arg(long, env = "JUDGE_REDIS", default_value = "redis://127.0.0.1:6379")]
@@ -51,7 +51,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let (pool, receiver) = JudgeWorkerPool::new(args.workers);
+    let num_workers = match args.workers.as_deref() {
+        Some("auto") | Some("") | None => None,
+        Some(s) => match s.parse::<usize>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                tracing::warn!("Invalid worker count '{}', falling back to auto-detection", s);
+                None
+            }
+        },
+    };
+
+    let (pool, receiver) = JudgeWorkerPool::new(num_workers);
     let pool = Arc::new(pool);
 
     match args.mode {
