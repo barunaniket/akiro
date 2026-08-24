@@ -9,3 +9,4 @@ Cargo.lock
 .idea/
 .vscode/
 *.iml
+docs/DUAL_TOKEN_ARCHITECTURE.md
