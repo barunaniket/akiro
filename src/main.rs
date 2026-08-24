@@ -25,8 +25,8 @@ struct Args {
     #[arg(long, env = "JUDGE_PORT", default_value = "8080")]
     port: u16,
 
-    /// Optional API secret key for securing endpoints
-    #[arg(long, env = "JUDGE_SECRET")]
+    /// Optional API secret key or cluster token for authentication
+    #[arg(long, alias = "token", env = "CLUSTER_TOKEN")]
     secret: Option<String>,
 
     /// Number of worker threads (auto-detect if not set)

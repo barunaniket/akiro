@@ -1,4 +1,4 @@
-﻿# Akiro - Ultra-Fast Distributed Competitive Programming Sandbox
+# Akiro - Ultra-Fast Distributed Competitive Programming Sandbox
 # Usage: just <recipe>
 
 default:
@@ -23,6 +23,14 @@ worker redis_url=(env_var_or_default("REDIS_URL", "redis://host.docker.internal:
         -e ENABLE_EMBEDDED_REDIS=false \
         akiro:latest --mode worker --redis {{redis_url}} --workers {{workers}}
     @echo "Akiro worker node started with {{workers}} workers ✓"
+
+# Join the cluster as a worker using CLUSTER_TOKEN
+join token=(env_var_or_default("CLUSTER_TOKEN", "")) host="host.docker.internal" port="6380" workers="8":
+    docker rm -f akiro-worker 2>/dev/null || true
+    docker run -d --name akiro-worker --privileged --restart unless-stopped \
+        -e ENABLE_EMBEDDED_REDIS=false \
+        akiro:latest --mode worker --redis "redis://:{{token}}@{{host}}:{{port}}" --workers {{workers}}
+    @echo "Akiro worker node connected to cluster with {{workers}} workers ✓"
 
 # Open keepalive SSH tunnel to Azure leader VM on port 6380
 tunnel vm_ip=(env_var_or_default("JUDGE_HOST", "20.219.186.217")) key_path=(env_var_or_default("SSH_KEY_PATH", "C:\Users\Aniket Barun/Downloads/azure-judge-key.pem")):

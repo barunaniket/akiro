@@ -18,7 +18,7 @@ iptables -A OUTPUT -d 169.254.169.254 -j DROP 2>/dev/null || true
 # Start embedded Redis daemon if enabled (default: true)
 ENABLE_REDIS="${ENABLE_EMBEDDED_REDIS:-true}"
 if [ "$ENABLE_REDIS" = "true" ]; then
-    REDIS_PASSWORD="${JUDGE_SECRET:-}"
+    REDIS_PASSWORD="${CLUSTER_TOKEN:-${JUDGE_SECRET:-}}"
     if [ -n "$REDIS_PASSWORD" ]; then
         redis-server --daemonize yes \
             --bind 0.0.0.0 \
