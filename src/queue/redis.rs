@@ -206,7 +206,16 @@ impl RedisConsumer {
                     match client.get_multiplexed_tokio_connection().await {
                         Ok(new_con) => {
                             async_con = new_con;
-                            tracing::info!("Reconnected to Redis successfully ✓");
+                            // Ensure consumer group and stream exist on reconnect or NOGROUP
+                            let _: Result<redis::Value, _> = redis::cmd("XGROUP")
+                                .arg("CREATE")
+                                .arg(&self.stream_key)
+                                .arg(&self.consumer_group)
+                                .arg("$")
+                                .arg("MKSTREAM")
+                                .query_async(&mut async_con)
+                                .await;
+                            tracing::info!("Reconnected to Redis and verified consumer group ✓");
                         }
                         Err(reconn_err) => {
                             tracing::debug!("Redis reconnection attempt failed: {}", reconn_err);
