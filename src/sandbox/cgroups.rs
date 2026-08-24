@@ -70,9 +70,13 @@ impl CgroupManager {
         let memory_max_path = self.cgroup_path.join("memory.max");
         write_cgroup_file(&memory_max_path, &config.memory_limit_bytes.to_string())?;
 
-        // Disable swap to prevent memory limit bypass
+        // Disable swap to prevent memory limit bypass and protect host RAM
         let memory_swap_max_path = self.cgroup_path.join("memory.swap.max");
-        write_cgroup_file(&memory_swap_max_path, "0")?;
+        let _ = write_cgroup_file(&memory_swap_max_path, "0");
+
+        // Also disable compressed zswap if supported by modern Linux kernels
+        let memory_zswap_max_path = self.cgroup_path.join("memory.zswap.max");
+        let _ = write_cgroup_file(&memory_zswap_max_path, "0");
 
         // Limit process count dynamically based on language profile
         let pids_max_path = self.cgroup_path.join("pids.max");
