@@ -1,52 +1,72 @@
-# ??? High-Performance Rust Judge Sandbox
+﻿<div align="center">
 
-An ultra-low overhead, enterprise-grade, memory-safe online judge execution engine built in Rust. Designed to run untrusted student code securely with microsecond-level isolation, sub-millisecond execution overhead, bounded backpressure defense, and horizontal multi-machine scaling via Redis Streams.
+# ⚡ Akiro
+
+**High-Performance, Memory-Safe Distributed Code Execution Engine & Online Judge Sandbox**
+
+[![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange?logo=rust)](https://www.rust-lang.org/)
+[![Docker Image](https://img.shields.io/badge/Container-ghcr.io%2Fbarunaniket%2Fakiro-blue?logo=docker)](https://github.com/barunaniket/akiro/pkgs/container/akiro)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Cgroups v2](https://img.shields.io/badge/Isolation-Cgroups_v2_%2B_Seccomp_BPF-red)](https://man7.org/linux/man-pages/man7/cgroups.7.html)
+[![Throughput](https://img.shields.io/badge/Throughput-76%2B_tests%2Fsec-success)](#-live-performance-benchmarks)
+
+*An ultra-low overhead, production-ready online judge sandbox built in Rust. Designed to execute untrusted code securely with nanosecond-level kernel isolation, sub-millisecond execution overhead, adaptive backpressure defense, and horizontal multi-node cluster scaling via Redis Streams.*
+
+</div>
 
 ---
 
-## ?? Table of Contents
+## 📑 Table of Contents
 
 - [Key Architecture & Safeguards](#-key-architecture--safeguards)
+- [Quick Start](#-quick-start)
 - [Supported Language Stack](#-supported-language-stack)
-- [System Requirements & Footprint](#-system-requirements--footprint)
+- [Distributed Cluster Mesh](#-distributed-cluster-mesh)
+- [REST API & WebSocket Specification](#-rest-api--websocket-specification)
 - [Live Performance Benchmarks](#-live-performance-benchmarks)
-- [API & WebSocket Specification](#-api--websocket-specification)
-- [Horizontal Multi-Machine Scaling (Redis)](#-horizontal-multi-machine-scaling-redis)
-- [Deployment & Systemd Service](#-deployment--systemd-service)
-- [Verification & Test Suite](#-verification--test-suite)
+- [Documentation Index](#-documentation-index)
 
 ---
 
-## ?? Key Architecture & Safeguards
+## 🛡️ Key Architecture & Safeguards
 
-The engine provides multi-layered kernel isolation and resource protection:
+Akiro employs a multi-layered **Defense-in-Depth** kernel isolation model matching the security standards of IOI/ICPC contest environments:
 
 ```
                       +----------------------------------------+
-                      �          Untrusted Submission          �
+                      |         Untrusted Submission           |
                       +----------------------------------------+
-                                          �
-                                          ?
+                                           |
+                                           v
                       +----------------------------------------+
-                      �         Axum REST / WS Gateway         �
-                      �  - DefaultBodyLimit: 2 MB              �
-                      �  - Queue Backpressure: max 128 (503)   �
+                      |         Axum REST / WS Gateway         |
+                      |  - Dual-Token Auth (JUDGE_SECRET)      |
+                      |  - DefaultBodyLimit: 2 MB              |
+                      |  - Bounded Tokio Channel: 128 (503)    |
                       +----------------------------------------+
-                                          �
-                                          ?
+                                           |
+                                           v
                       +----------------------------------------+
-                      �    Adaptive Worker Pool (Tokio)        �
-                      �    Workers = available_parallelism()   �
+                      |     Distributed Redis Stream Queue     |
+                      |  - Topic: judge:jobs (Consumer Groups) |
+                      |  - Active 20s TTL Worker Heartbeats    |
                       +----------------------------------------+
-                                          �
-    +---------------------------------------------------------------------------+
-    ?                                     ?                                     ?
+                                           |
+                                           v
+                      +----------------------------------------+
+                      |       Worker Pool Execution Mesh       |
+                      |  - Adaptive Concurrency (CPU Cores)    |
+                      +----------------------------------------+
+                                           |
+     +-------------------------------------+-------------------------------------+
+     |                                     |                                     |
+     v                                     v                                     v
 +------------------------+    +------------------------+    +------------------------+
-�   Linux Namespaces     �    �       Cgroups v2       �    �   Seccomp & RLIMITs    �
-� - CLONE_NEWNET (No net)�    � - memory.max = 256MB   �    � - RLIMIT_FSIZE (16MB)  �
-� - CLONE_NEWPID (Hidden)�    � - pids.max (anti-fork) �    � - RLIMIT_CPU (Hard kill�
-� - CLONE_NEWNS  (Mount) �    � - cgroup.kill cleanup  �    � - MS_RDONLY Rootfs     �
-� - pivot_root isolation �    � - memory.swap.max = 0  �    � - Blacklisted Syscalls �
+|    Linux Namespaces    |    |       Cgroups v2       |    |   Seccomp & RLIMITs    |
+| - CLONE_NEWNET (No net)|    | - memory.max = 256MB   |    | - RLIMIT_FSIZE (10MB)  |
+| - CLONE_NEWPID (Hidden)|    | - pids.max (anti-fork) |    | - RLIMIT_CPU (Hard kill|
+| - CLONE_NEWNS  (Mount) |    | - cgroup.kill cleanup  |    | - MS_RDONLY Rootfs     |
+| - pivot_root isolation |    | - memory.swap.max = 0  |    | - Strict Syscall Filter|
 +------------------------+    +------------------------+    +------------------------+
 ```
 
@@ -57,228 +77,199 @@ The engine provides multi-layered kernel isolation and resource protection:
 
 ### 2. Network Isolation (`CLONE_NEWNET` & Egress Filter)
 - Every submission executes in an unshared network namespace (`CLONE_NEWNET`) with no loopback interface (`lo` down). Socket creations and network egress fail instantly.
-- Container-level iptables rules drop traffic directed to cloud metadata endpoints (`169.254.169.254`).
+- Blocks access to cloud metadata endpoints (`169.254.169.254`).
 
 ### 3. Resource & Fork-Bomb Protection (`Cgroups v2` + `pids.max`)
 - Sandboxed processes are placed in dedicated cgroups under `/sys/fs/cgroup/judge/<uuid>`.
 - Strict memory caps (`memory.max = 256MB`, `memory.swap.max = 0`) trigger immediate kernel-level OOM killing on over-allocation.
 - Thread/process count is strictly capped (`pids.max = 2` for C/C++/Python, `12` for Bun/Java), preventing fork-bomb DoS attacks.
-- Atomic cgroup cleanup via `cgroup.kill` guarantees no zombie or orphan child processes remain after execution.
+- Atomic cgroup cleanup via `cgroup.kill` guarantees zero zombie or orphan child processes remain after execution.
 
 ### 4. Output Limit Enforcement (`RLIMIT_FSIZE`)
-- Hard file size and output limit enforced via `RLIMIT_FSIZE` (default: 16 MB).
-- Infinite output floods (`while(1) printf("A");`) trigger immediate `SIGXFSZ` and `RuntimeError` / `OutputLimitExceeded` verdict.
-
-### 5. Contest Stampede & Backpressure Resilience
-- **Adaptive Concurrency**: Number of execution workers automatically detects CPU core count (`available_parallelism()`). On a 1-core machine, exactly 1 job runs at any instant to protect RAM.
-- **Bounded Channel Queue**: Tokio channel is bounded to 128 pending jobs (`JUDGE_MAX_QUEUE`).
-- **HTTP 503 Retry Defense**: When the queue is saturated, incoming requests immediately return `HTTP 503 Service Unavailable` with `{"retry_after_secs": 3}` instead of accumulating unbounded TCP buffers.
-- **Body Size Caps**: `DefaultBodyLimit::max(2 MB)` rejects oversize requests before parsing.
+- Hard file size and output limit enforced via `RLIMIT_FSIZE` (default: 10 MB).
+- Infinite output floods (`while(1) printf("A");`) trigger immediate `SIGXFSZ` and `RuntimeError` within 20ms.
 
 ---
 
-## ?? Supported Language Stack
+## 🚀 Quick Start
 
-All runtimes are pre-warmed for competitive programming speed:
+### Option 1: Run Pre-Built Container via GHCR (Recommended)
 
-| Language | Runtime / Compiler | Version | Optimizations Applied |
-| :--- | :--- | :--- | :--- |
-| **C** | GCC | 12.2+ | `-O3 -march=x86-64` |
-| **C++** | G++ | 12.2+ (C++20) | Precompiled `<bits/stdc++.h>` PCH + **AtCoder Library (ACL)** |
-| **Python 3** | CPython | 3.11+ | Precompiled standard library bytecode (`.pyc`) |
-| **JavaScript** | Bun | 1.1+ | V8-compatible fast engine, `--no-addons` |
-| **TypeScript** | Bun TS | 1.1+ | Native zero-transpile JIT |
-| **SQL** | SQLite3 | 3.40+ | In-memory execution with CSV table output parsing |
-| **Java** | OpenJDK | 17 LTS | Headless JDK + Pre-dumped **Java CDS (Class Data Sharing)** |
+#### Start as Standalone Gateway + Worker:
+```bash
+docker run -d --name akiro --privileged -p 8080:8080 --restart unless-stopped \
+  ghcr.io/barunaniket/akiro:latest
+```
+
+#### Join as a Distributed Worker Node:
+```bash
+docker run -d --name akiro-worker --privileged --restart unless-stopped \
+  ghcr.io/barunaniket/akiro:latest --mode worker \
+  --redis "redis://:CLUSTER_TOKEN@LEADER_IP:6379" --workers auto
+```
+
+### Option 2: Build from Source
+
+```bash
+# Prerequisites: Rust 1.75+, Linux with Cgroups v2 enabled, libseccomp-dev
+git clone https://github.com/barunaniket/akiro.git
+cd akiro
+cargo build --release
+sudo ./target/release/akiro --mode all --port 8080
+```
 
 ---
 
-## ?? Live Performance Benchmarks
+## 🌐 Supported Language Stack
 
-*Tested on a live Azure Virtual Machine: 2 vCPUs, 1 GB RAM, Ubuntu 24.04 LTS.*
+All runtimes are pre-warmed and compiled with competitive programming optimizations:
 
-```
-+--------------------------------------------------------------------------------+
-� Language / Workload             � Throughput (/sec)  � Avg Latency    � P50    �
-+---------------------------------+--------------------+----------------+--------�
-� TypeScript (Bun JIT)            � 26.70 / sec        � 146.1 ms       � 144 ms �
-� Python 3 (.pyc Bytecode)        � 26.61 / sec        � 146.3 ms       � 145 ms �
-� SQL (SQLite3 In-Memory)         � 26.40 / sec        � 148.8 ms       � 144 ms �
-� JavaScript (Bun)                � 21.65 / sec        � 180.9 ms       � 144 ms �
-� C (GCC -O3)                     � 11.65 / sec        � 170.5 ms       � 167 ms �
-� C++ (G++ -O3 + PCH)             �  2.65 / sec        � 755.0 ms       � 739 ms �
-� Java (OpenJDK 17 + javac + CDS) �  1.38 / sec        � 1432.5 ms      � 1391 ms�
-+--------------------------------------------------------------------------------+
-```
-
-- **Memory Footprint**: Only **~20 MB RAM** at idle.
-- **Pass Rate**: **100% (18/18 tests)** across all languages, error verdicts, and attack vectors.
+| Language | Identifier | Compiler / Engine | Version | Optimizations Applied |
+| :--- | :---: | :--- | :--- | :--- |
+| **C++** | `cpp` | G++ | 12.2+ (C++20) | Precompiled `<bits/stdc++.h>` (PCH) + **AtCoder Library (ACL)** |
+| **C** | `c` | GCC | 12.2+ | `-O3 -march=x86-64` |
+| **Python** | `python` | CPython | 3.11+ | Precompiled standard library bytecode (`.pyc`) |
+| **Java** | `java` | OpenJDK | 17 LTS | Pre-dumped **Java CDS (Class Data Sharing)** archive |
+| **JavaScript** | `javascript` | Bun | 1.1+ | Fast V8-compatible runtime engine |
+| **TypeScript** | `typescript` | Bun TS | 1.1+ | Native zero-transpile JIT execution |
+| **SQL** | `sql` | SQLite3 | 3.40+ | In-memory relational query execution with CSV table output parsing |
 
 ---
 
-## ?? API & WebSocket Specification
+## ⚡ Distributed Cluster Mesh
 
-### 1. Health & Queue Telemetry
-```http
-GET /health
+Akiro features a **Dual-Token Architecture** allowing effortless scaling from 1 machine to hundreds of distributed nodes:
+
 ```
-**Response:**
+[ Frontend / Next.js ] 
+        | (HTTPS + JUDGE_SECRET)
+        v
+[ Akiro Leader Node (Azure) ] <--- Port 6379 (CLUSTER_TOKEN) ---> [ Laptop Worker 1 (8 Cores) ]
+                               <--- Port 6379 (CLUSTER_TOKEN) ---> [ Laptop Worker 2 (16 Cores) ]
+                               <--- Port 6379 (CLUSTER_TOKEN) ---> [ Cloud VM Worker N ... ]
+```
+
+* **`JUDGE_SECRET`**: Protects the public HTTP API (`POST /api/v1/submit` and `GET /health`).
+* **`CLUSTER_TOKEN`**: Authenticates distributed worker nodes directly to the Redis Streams queue.
+* **Active 20s TTL Heartbeats**: Connected worker nodes automatically report CPU capacity to `judge:heartbeat:<consumer>` without dropping when idle.
+
+---
+
+## 📡 REST API & WebSocket Specification
+
+### Health Check (`GET /health`)
+```bash
+curl -s https://<HOST>/health
+```
 ```json
 {
-  "total_workers": 2,
-  "idle_workers": 2,
+  "total_workers": 18,
+  "idle_workers": 18,
   "busy_workers": 0,
   "queued_jobs": 0,
-  "uptime_secs": 1240
+  "uptime_secs": 3600
 }
 ```
 
-### 2. Synchronous Code Evaluation
-```http
-POST /api/v1/submit
-Content-Type: application/json
-X-Judge-Secret: your_secure_random_token  # Required when JUDGE_SECRET is configured
-```
-**Request Payload:**
-```json
-{
-  "job_id": "submission-1001",
-  "language": "cpp",
-  "source_code": "#include <iostream>\nusing namespace std;\nint main() {\n  int a, b;\n  if (cin >> a >> b) cout << a + b << endl;\n  return 0;\n}",
-  "time_limit_ms": 2000,
-  "memory_limit_bytes": 268435456,
-  "test_cases": [
-    {
-      "input": "15 25",
-      "expected_output": "40"
-    }
-  ]
-}
+### Submit Code (`POST /api/v1/submit`)
+```bash
+curl -X POST https://<HOST>/api/v1/submit \
+  -H "Content-Type: application/json" \
+  -H "X-Judge-Secret: <JUDGE_SECRET>" \
+  -d '{
+    "job_id": "job-101",
+    "language": "cpp",
+    "time_limit_ms": 1000,
+    "memory_limit_bytes": 134217728,
+    "source_code": "#include <iostream>\nint main() { int a, b; if (std::cin >> a >> b) std::cout << a + b << std::endl; return 0; }",
+    "test_cases": [
+      {"input": "15 27\n", "expected_output": "42\n"},
+      {"input": "100 200\n", "expected_output": "300\n"}
+    ]
+  }'
 ```
 
-**Response (`Accepted`):**
+### Response Schema:
 ```json
 {
-  "job_id": "submission-1001",
+  "job_id": "job-101",
   "verdict": "Accepted",
-  "total_time_ms": 42,
-  "peak_memory_bytes": 28180480,
-  "test_case_results": [
+  "total_cpu_time_ms": 8,
+  "peak_memory_kb": 6864,
+  "compile_output": null,
+  "test_results": [
     {
       "test_case_index": 0,
-      "verdict": "Accepted",
-      "time_ms": 2,
-      "memory_bytes": 4194304,
-      "stdout": "40\n",
-      "stderr": ""
+      "status": "Accepted",
+      "cpu_time_ms": 4,
+      "memory_kb": 6864
+    },
+    {
+      "test_case_index": 1,
+      "status": "Accepted",
+      "cpu_time_ms": 4,
+      "memory_kb": 6864
     }
   ]
 }
 ```
 
-### 3. Real-Time WebSocket Streaming
-```http
-WS /api/v1/ws/submit
+### Verdict Definitions:
+* `Accepted`: All test cases matched within resource limits.
+* `WrongAnswer`: Standard output mismatched expected output.
+* `TimeLimitExceeded`: Process exceeded CPU or wall-clock execution ceiling.
+* `MemoryLimitExceeded`: Process breached cgroup memory threshold.
+* `RuntimeError`: Non-zero exit code or fatal signal (`SIGSEGV`, `SIGFPE`, `SIGXFSZ`).
+* `CompilationError`: Compiler syntax/linker failure (diagnostics returned in `compile_output`).
+
+---
+
+## 📊 Live Performance Benchmarks
+
+### 1. 200-Submission Multi-Language Round-Robin Stress Test
+*Evaluated across all 7 languages on an 18-worker distributed cluster:*
+
 ```
-Client sends the JSON payload and receives streaming progress events in real-time:
-```json
-{"event": "Compiling", "job_id": "submission-1001"}
-{"event": "Running", "job_id": "submission-1001", "test_case_index": 0}
-{"event": "Completed", "result": { ... }}
+================================================================
+  • Total Submissions:      200 jobs
+  • Total Wall Time:        11.88 seconds
+  • Throughput:             16.84 submissions / second
+  • Success Rate:           200 / 200 (100.0% Accepted)
+  • Mean Latency:           932.1 ms
+  • Median Latency (p50):   579.7 ms
+================================================================
+```
+
+### 2. Heavy 3,000-Sandbox Algorithmic Stress Test (100 Tests / Submission)
+*Evaluated with Kadane's Dynamic Programming Algorithm (randomized arrays) with 100 test cases per job:*
+
+```
+================================================================
+  • Heavy Submissions:      30 jobs
+  • Total Test Cases Run:   3,000 isolated sandboxes
+  • Total Wall Time:        39.23 seconds
+  • Test Execution Rate:    76.47 testcases / second
+  • Individual Test Pass:   3,000 / 3,000 (100.0% Passed)
+  • Cluster Status:         Zero memory leaks, zero hanging queues
+================================================================
 ```
 
 ---
 
-## ?? Horizontal Multi-Machine Scaling (Redis)
+## 📚 Documentation Index
 
-The engine can run as a distributed cluster across multiple servers:
+Detailed architectural and operational documentation can be found in the [`docs/`](docs/) directory:
 
-```
-               +------------------------------+
-               �    HTTP / Web Frontend       �
-               � (Submits code via API / Web) �
-               +------------------------------+
-                              � XADD judge:jobs
-                              ?
-               +------------------------------+
-               �     Central Redis Stream     �
-               �        (`judge:jobs`)        �
-               �  Consumer Group: `workers`   �
-               +------------------------------+
-                       �              �
-        +----------------------+      +----------------------+
-        ?                      ?                     ?       ?
-+----------------+     +----------------+    +----------------+
-�  Worker Node 1 �     �  Worker Node 2 �     �  Worker Node 3 �
-�  (Azure VPS)   �     �  (Laptop / PC) �     �  (On-Prem VM)  �
-+----------------+     +----------------+    +----------------+
-```
-
-1. **Consumer Groups**: Workers claim jobs via `XREADGROUP`, ensuring zero duplicate executions.
-2. **Result Cache**: Verdicts are stored in `judge:results:<job_id>` with 24-hour TTL and acknowledged via `XACK`.
-3. **Launch Worker**:
-   ```bash
-   akiro --mode worker --redis redis://<REDIS_HOST>:6379
-   ```
+- 📖 [`docs/DUAL_TOKEN_ARCHITECTURE.md`](docs/DUAL_TOKEN_ARCHITECTURE.md): Cluster scaling, tokens, and volunteer joining guide.
+- 📖 [`docs/HORIZONTAL_SCALING.md`](docs/HORIZONTAL_SCALING.md): Redis Streams worker mesh topology.
+- 📖 [`docs/COLAB_SETUP.md`](docs/COLAB_SETUP.md): Google Colab GPU/CPU worker node integration.
+- 📖 [`docs/PHASE2_IMPLEMENTATION.md`](docs/PHASE2_IMPLEMENTATION.md) – [`docs/PHASE5_IMPLEMENTATION.md`](docs/PHASE5_IMPLEMENTATION.md): Sandbox milestones and implementation chronicles.
+- 📖 [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md): Security audit and attack resilience verification.
 
 ---
 
-## ?? Deployment & Systemd Service
+## 📜 License
 
-### Quick Container Run
-```bash
-sudo docker run -d \
-  --name akiro-server \
-  --restart always \
-  --init \
-  --privileged \
-  -p 8080:8080 \
-  -e JUDGE_MODE=server \
-  -e JUDGE_PORT=8080 \
-  -e JUDGE_MAX_QUEUE=128 \
-  akiro
-```
+Distributed under the **MIT License**. See `LICENSE` for more information.
 
-### Production Systemd Service
-Create `/etc/systemd/system/akiro.service`:
-
-```ini
-[Unit]
-Description=CodeChef Judge Sandbox Execution Service
-After=docker.service
-Requires=docker.service
-
-[Service]
-TimeoutStartSec=0
-Restart=always
-RestartSec=5s
-ExecStartPre=-/usr/bin/docker stop akiro-server
-ExecStartPre=-/usr/bin/docker rm akiro-server
-ExecStart=/usr/bin/docker run --name akiro-server --init --privileged -p 8080:8080 -e RUST_LOG=info -e JUDGE_MODE=server -e JUDGE_PORT=8080 -e JUDGE_MAX_QUEUE=128 akiro
-ExecStop=/usr/bin/docker stop -t 10 akiro-server
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable akiro
-sudo systemctl start akiro
-```
-
----
-
-## ?? Verification & Test Suite
-
-Run the 18-point verification test suite covering all target languages and security attack vectors:
-
-```bash
-node scripts/comprehensive_test_suite.js http://localhost:8080
-```
-
-Run the multi-language live throughput benchmark:
-```bash
-node scripts/benchmark_throughput.js
-```
+Developed with ❤️ by **[Aniket Barun](https://github.com/barunaniket)** for **CodeChef PESU-ECC Chapter**.
