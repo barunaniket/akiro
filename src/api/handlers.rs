@@ -25,6 +25,27 @@ fn get_cluster_stats(
 ) -> (usize, usize, usize) {
     if let Ok(client) = redis::Client::open(redis_url) {
         if let Ok(mut con) = client.get_connection() {
+            // Check real-time heartbeat registrations (updated every 20s by live workers)
+            let heartbeat_keys: redis::RedisResult<Vec<String>> = redis::cmd("KEYS")
+                .arg("judge:heartbeat:*")
+                .query(&mut con);
+
+            if let Ok(keys) = heartbeat_keys {
+                if !keys.is_empty() {
+                    let mut total_heartbeat_workers = 0;
+                    for key in &keys {
+                        if let Ok(count_str) = redis::cmd("GET").arg(key).query::<String>(&mut con) {
+                            if let Ok(count) = count_str.parse::<usize>() {
+                                total_heartbeat_workers += count;
+                            }
+                        }
+                    }
+                    if total_heartbeat_workers > 0 {
+                        return (total_heartbeat_workers, total_heartbeat_workers, 0);
+                    }
+                }
+            }
+
             let res: redis::RedisResult<redis::Value> = redis::cmd("XINFO")
                 .arg("CONSUMERS")
                 .arg("judge:jobs")

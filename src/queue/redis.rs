@@ -79,7 +79,16 @@ impl RedisConsumer {
         );
 
         loop {
-            // Heartbeat: keep consumer registration fresh in consumer group
+            // Heartbeat: register active worker node with 20-second TTL
+            let heartbeat_key = format!("judge:heartbeat:{}", self.consumer_name);
+            let _: Result<redis::Value, _> = redis::cmd("SET")
+                .arg(&heartbeat_key)
+                .arg(num_workers)
+                .arg("EX")
+                .arg(20)
+                .query_async(&mut async_con)
+                .await;
+
             let _: Result<redis::Value, _> = redis::cmd("XGROUP")
                 .arg("CREATECONSUMER")
                 .arg(&self.stream_key)
