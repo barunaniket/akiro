@@ -50,4 +50,9 @@ echo " Workers: ${JUDGE_WORKERS:-auto}"
 echo " Redis:   ${JUDGE_REDIS:-none}"
 echo "----------------------------------------------"
 
+# If JUDGE_WORKERS is set to "auto", unset it so clap defaults to CPU core count
+if [ "$JUDGE_WORKERS" = "auto" ]; then
+    unset JUDGE_WORKERS
+fi
+
 exec akiro "$@"
