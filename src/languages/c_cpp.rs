@@ -26,6 +26,7 @@ impl LanguageRunner for C {
             SandboxConfig::new(std::path::PathBuf::from("/usr/bin/gcc"))
                 .with_args(vec![
                     "-O3".to_string(),
+                    "-pipe".to_string(),
                     "-std=c17".to_string(),
                     "-o".to_string(),
                     bin_str,
@@ -72,6 +73,7 @@ impl LanguageRunner for Cpp {
             SandboxConfig::new(std::path::PathBuf::from("/usr/bin/g++"))
                 .with_args(vec![
                     "-O3".to_string(),
+                    "-pipe".to_string(),
                     "-std=c++20".to_string(),
                     "-ftemplate-depth=128".to_string(),
                     "-o".to_string(),
