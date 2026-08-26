@@ -153,8 +153,8 @@ async fn submit_to_cluster(
         .query_async(&mut con)
         .await?;
 
-    // Wait for any cluster worker node to pick up and process the job
-    let max_wait_ms = (request.time_limit_ms * request.test_cases.len() as u64 + 20_000).max(10_000);
+    // Wait for any cluster worker node to pick up and process the job (ample buffer for 200+ job stampedes)
+    let max_wait_ms = (request.time_limit_ms * request.test_cases.len() as u64 * 3 + 60_000).max(600_000);
     let start = std::time::Instant::now();
 
     while start.elapsed().as_millis() < max_wait_ms as u128 {
