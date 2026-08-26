@@ -139,8 +139,7 @@ impl ExecutionPipeline {
                     if memory_limit_kb > 0 && exec_result.memory_kb > memory_limit_kb {
                         JudgeVerdict::MemoryLimitExceeded
                     } else if let Some(expected_str) = &expected {
-                        let stdout_str = String::from_utf8_lossy(&exec_result.stdout);
-                        if stdout_str.trim() == expected_str.trim() {
+                        if trim_bytes(&exec_result.stdout) == trim_bytes(expected_str.as_bytes()) {
                             JudgeVerdict::Accepted
                         } else {
                             JudgeVerdict::WrongAnswer
@@ -203,6 +202,13 @@ impl ExecutionPipeline {
 
         Ok(result)
     }
+}
+
+/// Zero-allocation byte-level whitespace trimming (avoids UTF-8 decode + String alloc)
+fn trim_bytes(b: &[u8]) -> &[u8] {
+    let start = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
+    let end = b.iter().rposition(|c| !c.is_ascii_whitespace()).map_or(start, |p| p + 1);
+    &b[start..end]
 }
 
 #[cfg(test)]

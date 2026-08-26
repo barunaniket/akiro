@@ -42,20 +42,51 @@ impl ProcessSupervisor {
     pub async fn supervise(&self) -> Result<ExecutionResult, SupervisorError> {
         let wall_time_deadline = self.config.wall_time_limit_ms;
 
+        // Try event-driven supervision via pidfd_open (Linux 5.3+)
+        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.pid.as_raw(), 0 as c_int) } as c_int;
+
+        if pidfd >= 0 {
+            // Event-driven: zero-latency child exit detection
+            let async_fd = match tokio::io::unix::AsyncFd::new(pidfd) {
+                Ok(fd) => fd,
+                Err(_) => {
+                    unsafe { libc::close(pidfd); }
+                    return self.supervise_polling(wall_time_deadline).await;
+                }
+            };
+
+            tokio::select! {
+                _ = async_fd.readable() => {
+                    // Child exited — instant wakeup (0ms latency)
+                    unsafe { libc::close(pidfd); }
+                    self.kill_process_tree();
+                    return self.wait_for_child();
+                }
+                _ = sleep(Duration::from_millis(wall_time_deadline)) => {
+                    // Time limit exceeded
+                    unsafe { libc::close(pidfd); }
+                    self.kill_process_tree();
+                    return self.wait_for_child();
+                }
+            }
+        } else {
+            // Fallback for older kernels: polling with reduced interval
+            self.supervise_polling(wall_time_deadline).await
+        }
+    }
+
+    async fn supervise_polling(&self, wall_time_deadline: u64) -> Result<ExecutionResult, SupervisorError> {
         loop {
             let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
 
             if elapsed_ms >= wall_time_deadline {
                 self.kill_process_tree();
-                sleep(Duration::from_millis(50)).await;
                 break;
             }
 
-            let poll_interval = 20; // 20ms fast poll
-            sleep(Duration::from_millis(poll_interval)).await;
+            sleep(Duration::from_millis(5)).await; // 5ms poll (reduced from 20ms)
 
             if let Some(result) = self.try_wait()? {
-                // When primary process exits, terminate any orphaned background children
                 self.kill_process_tree();
                 return Ok(result);
             }

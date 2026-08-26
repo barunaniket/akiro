@@ -166,19 +166,11 @@ impl RedisConsumer {
                                                                     Ok(result) => {
                                                                         let result_key = format!("judge:results:{}", request.job_id);
                                                                         let result_json = serde_json::to_string(&result).unwrap_or_default();
-                                                                        
-                                                                        let _: Result<(), _> = redis::cmd("SET")
-                                                                            .arg(&result_key)
-                                                                            .arg(&result_json)
-                                                                            .arg("EX")
-                                                                            .arg(86400)
-                                                                            .query_async(&mut task_con)
-                                                                            .await;
 
-                                                                        let _: Result<(), _> = redis::cmd("XACK")
-                                                                            .arg(&stream_key)
-                                                                            .arg(&consumer_group)
-                                                                            .arg(&msg_id)
+                                                                        // Pipeline SET + XACK in a single round-trip
+                                                                        let _: Result<(), _> = redis::pipe()
+                                                                            .cmd("SET").arg(&result_key).arg(&result_json).arg("EX").arg(86400)
+                                                                            .cmd("XACK").arg(&stream_key).arg(&consumer_group).arg(&msg_id)
                                                                             .query_async(&mut task_con)
                                                                             .await;
 

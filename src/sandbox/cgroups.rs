@@ -141,17 +141,28 @@ impl CgroupManager {
     pub fn cleanup(&self) -> Result<(), CgroupError> {
         self.kill_all();
 
-        // Small delay to allow processes to die
-        std::thread::sleep(std::time::Duration::from_millis(50));
-
-        // Remove cgroup directory
-        fs::remove_dir(&self.cgroup_path).map_err(|e| {
-            CgroupError::CleanupFailed(format!(
-                "Failed to remove cgroup {}: {}",
-                self.cgroup_path.display(),
-                e
-            ))
-        })?;
+        // Attempt removal immediately — cgroup.kill is atomic on Linux 5.14+
+        match fs::remove_dir(&self.cgroup_path) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.raw_os_error() == Some(libc::EBUSY) => {
+                // Brief yield and single retry if processes haven't fully exited yet
+                std::thread::yield_now();
+                fs::remove_dir(&self.cgroup_path).map_err(|e| {
+                    CgroupError::CleanupFailed(format!(
+                        "Failed to remove cgroup {}: {}",
+                        self.cgroup_path.display(),
+                        e
+                    ))
+                })?;
+            }
+            Err(e) => {
+                return Err(CgroupError::CleanupFailed(format!(
+                    "Failed to remove cgroup {}: {}",
+                    self.cgroup_path.display(),
+                    e
+                )));
+            }
+        }
 
         Ok(())
     }

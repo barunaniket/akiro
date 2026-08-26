@@ -25,7 +25,8 @@ if [ "$ENABLE_REDIS" = "true" ]; then
             --port 6379 \
             --requirepass "$REDIS_PASSWORD" \
             --maxmemory 64mb \
-            --maxmemory-policy allkeys-lru
+            --maxmemory-policy allkeys-lru \
+            --save "" --appendonly no
         if [ -z "$JUDGE_REDIS" ]; then
             export JUDGE_REDIS="redis://:${REDIS_PASSWORD}@127.0.0.1:6379"
         fi
@@ -34,7 +35,8 @@ if [ "$ENABLE_REDIS" = "true" ]; then
             --bind 127.0.0.1 \
             --port 6379 \
             --maxmemory 64mb \
-            --maxmemory-policy allkeys-lru
+            --maxmemory-policy allkeys-lru \
+            --save "" --appendonly no
         if [ -z "$JUDGE_REDIS" ]; then
             export JUDGE_REDIS="redis://127.0.0.1:6379"
         fi

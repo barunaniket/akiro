@@ -37,3 +37,11 @@ criterion = "0.5"
 [[bench]]
 name = "sandbox_bench"
 harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = false
