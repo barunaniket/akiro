@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
+use futures_util::StreamExt;
 
 use super::job::{JobRequest, JobResult, JudgeVerdict, TestCaseResult, ProgressEvent};
 
@@ -92,12 +93,17 @@ impl ExecutionPipeline {
             Path::new("/sandbox").join(runner.get_source_filename())
         };
 
-        for (idx, test_case) in request.test_cases.iter().enumerate() {
-            let _ = progress.as_ref().map(|p| p.send(ProgressEvent::Running {
-                test_case: idx + 1,
-                total: request.test_cases.len(),
-            }));
+        // Determine concurrent workers for test case evaluation (bounded to available parallelism)
+        let concurrency = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4)
+            .min(16);
 
+        let total_tests = request.test_cases.len();
+
+        let mut test_futs = Vec::with_capacity(total_tests);
+
+        for (idx, test_case) in request.test_cases.iter().enumerate() {
             let run_config = runner.get_run_command(
                 &sandbox_bin_path,
                 test_case.input.as_bytes(),
@@ -111,18 +117,30 @@ impl ExecutionPipeline {
             .with_network_isolation(true)
             .with_pids_limit(runner.max_pids());
 
-            let exec_result = Sandbox::execute(run_config)
-                .await
-                .map_err(|e| format!("Sandbox error during execution: {}", e))?;
+            let expected = test_case.expected_output.clone();
+            let time_limit_ms = request.time_limit_ms;
+            let memory_limit_bytes = request.memory_limit_bytes;
 
-            let memory_limit_kb = request.memory_limit_bytes / 1024;
+            test_futs.push(async move {
+                let exec_result = Sandbox::execute(run_config).await;
+                (idx, expected, time_limit_ms, memory_limit_bytes, exec_result)
+            });
+        }
+
+        let mut stream = futures_util::stream::iter(test_futs).buffer_unordered(concurrency);
+        let mut raw_results = Vec::with_capacity(total_tests);
+
+        while let Some((idx, expected, time_limit_ms, memory_limit_bytes, exec_res)) = stream.next().await {
+            let exec_result = exec_res.map_err(|e| format!("Sandbox error during execution: {}", e))?;
+            let memory_limit_kb = memory_limit_bytes / 1024;
+
             let verdict = match exec_result.status {
                 SandboxStatus::Ok => {
                     if memory_limit_kb > 0 && exec_result.memory_kb > memory_limit_kb {
                         JudgeVerdict::MemoryLimitExceeded
-                    } else if let Some(expected) = &test_case.expected_output {
+                    } else if let Some(expected_str) = &expected {
                         let stdout_str = String::from_utf8_lossy(&exec_result.stdout);
-                        if stdout_str.trim() == expected.trim() {
+                        if stdout_str.trim() == expected_str.trim() {
                             JudgeVerdict::Accepted
                         } else {
                             JudgeVerdict::WrongAnswer
@@ -136,7 +154,7 @@ impl ExecutionPipeline {
                 _ => {
                     if memory_limit_kb > 0 && exec_result.memory_kb > memory_limit_kb {
                         JudgeVerdict::MemoryLimitExceeded
-                    } else if exec_result.cpu_time_ms >= request.time_limit_ms {
+                    } else if exec_result.cpu_time_ms >= time_limit_ms {
                         JudgeVerdict::TimeLimitExceeded
                     } else {
                         JudgeVerdict::RuntimeError
@@ -144,15 +162,22 @@ impl ExecutionPipeline {
                 }
             };
 
-            result.total_cpu_time_ms += exec_result.cpu_time_ms;
-            result.peak_memory_kb = result.peak_memory_kb.max(exec_result.memory_kb);
-
             let _ = progress.as_ref().map(|p| p.send(ProgressEvent::TestResult {
                 test_case: idx + 1,
                 verdict,
                 time_ms: exec_result.cpu_time_ms,
                 memory_kb: exec_result.memory_kb,
             }));
+
+            raw_results.push((idx, verdict, exec_result));
+        }
+
+        // Sort results by original test case index so order is strictly deterministic
+        raw_results.sort_by_key(|r| r.0);
+
+        for (idx, verdict, exec_result) in raw_results {
+            result.total_cpu_time_ms += exec_result.cpu_time_ms;
+            result.peak_memory_kb = result.peak_memory_kb.max(exec_result.memory_kb);
 
             result.test_results.push(TestCaseResult {
                 test_case_index: idx,
@@ -163,11 +188,8 @@ impl ExecutionPipeline {
                 stderr: exec_result.stderr,
             });
 
-            // Early exit on first failure
-            if verdict != JudgeVerdict::Accepted {
+            if verdict != JudgeVerdict::Accepted && result.verdict == JudgeVerdict::Accepted {
                 result.verdict = verdict;
-                let _ = progress.as_ref().map(|p| p.send(ProgressEvent::Finished { verdict }));
-                break;
             }
         }
 
