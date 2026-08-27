@@ -130,6 +130,8 @@ impl ExecutionPipeline {
         let mut stream = futures_util::stream::iter(test_futs).buffer_unordered(concurrency);
         let mut raw_results = Vec::with_capacity(total_tests);
 
+        let stop_on_fail = request.stop_on_first_fail.unwrap_or(false);
+
         while let Some((idx, expected, time_limit_ms, memory_limit_bytes, exec_res)) = stream.next().await {
             let exec_result = exec_res.map_err(|e| format!("Sandbox error during execution: {}", e))?;
             let memory_limit_kb = memory_limit_bytes / 1024;
@@ -169,6 +171,11 @@ impl ExecutionPipeline {
             }));
 
             raw_results.push((idx, verdict, exec_result));
+
+            if stop_on_fail && verdict != JudgeVerdict::Accepted {
+                // Short-circuit immediately on first failing test case
+                break;
+            }
         }
 
         // Sort results by original test case index so order is strictly deterministic

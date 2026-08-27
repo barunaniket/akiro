@@ -55,8 +55,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # C / C++
     gcc g++ libc6-dev \
-    # Python
-    python3 \
+    # Python & PyPy3
+    python3 pypy3 \
     # Java (headless JDK — includes javac + java)
     default-jdk-headless \
     # SQL (SQLite3)
@@ -73,7 +73,7 @@ RUN curl -fsSL https://bun.sh/install | bash && \
     chmod +x /usr/local/bin/bun
 
 # ─── Verify all expected binary paths exist ───
-RUN set -e; for bin in gcc g++ python3 javac java sqlite3 bun; do \
+RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun; do \
       command -v "$bin" || { echo "MISSING: $bin"; exit 1; }; \
     done && echo "All target language toolchains verified ✓"
 

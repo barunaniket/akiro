@@ -3,6 +3,13 @@ use akiro::{api, queue::redis::RedisConsumer, JobEnvelope, JudgeWorkerPool};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 #[derive(Debug, Clone, ValueEnum)]
 enum RunMode {
     /// Run only the HTTP/WebSocket REST gateway

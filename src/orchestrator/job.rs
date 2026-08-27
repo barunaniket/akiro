@@ -7,14 +7,21 @@ pub struct TestCase {
     pub expected_output: Option<String>,
 }
 
+fn default_job_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRequest {
+    #[serde(default = "default_job_id")]
     pub job_id: String,
     pub language: String,
     pub source_code: String,
     pub time_limit_ms: u64,
     pub memory_limit_bytes: u64,
     pub test_cases: Vec<TestCase>,
+    #[serde(default)]
+    pub stop_on_first_fail: Option<bool>,
 }
 
 impl JobRequest {
@@ -32,6 +39,7 @@ impl JobRequest {
             time_limit_ms,
             memory_limit_bytes,
             test_cases,
+            stop_on_first_fail: None,
         }
     }
 }
