@@ -9,6 +9,7 @@ pub mod golang;
 pub mod javascript;
 pub mod sql;
 pub mod kotlin;
+pub mod csharp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportedLanguage {
@@ -20,6 +21,7 @@ pub enum SupportedLanguage {
     PyPy,
     Java,
     Kotlin,
+    CSharp,
     JavaScript,
     TypeScript,
     Sql,
@@ -36,6 +38,7 @@ impl SupportedLanguage {
             SupportedLanguage::PyPy => Box::new(python::PyPy),
             SupportedLanguage::Java => Box::new(java::Java),
             SupportedLanguage::Kotlin => Box::new(kotlin::Kotlin),
+            SupportedLanguage::CSharp => Box::new(csharp::CSharp),
             SupportedLanguage::JavaScript => Box::new(javascript::JavaScript),
             SupportedLanguage::TypeScript => Box::new(javascript::TypeScript),
             SupportedLanguage::Sql => Box::new(sql::Sql),
@@ -52,6 +55,7 @@ impl SupportedLanguage {
             "pypy" | "pypy3" => Some(SupportedLanguage::PyPy),
             "java" => Some(SupportedLanguage::Java),
             "kotlin" | "kt" => Some(SupportedLanguage::Kotlin),
+            "csharp" | "cs" | "c#" => Some(SupportedLanguage::CSharp),
             "javascript" | "js" => Some(SupportedLanguage::JavaScript),
             "typescript" | "ts" => Some(SupportedLanguage::TypeScript),
             "sql" | "sqlite" | "sqlite3" => Some(SupportedLanguage::Sql),

@@ -59,6 +59,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 pypy3 \
     # Java (headless JDK — includes javac + java)
     default-jdk-headless \
+    # C# (Mono C# compiler csc + mono runtime)
+    mono-devel \
     # SQL (SQLite3)
     sqlite3 \
     # Embedded Redis Queue
@@ -80,8 +82,12 @@ RUN curl -fsSL https://github.com/JetBrains/kotlin/releases/download/v2.1.10/kot
     rm /tmp/kotlin.zip && \
     echo "Kotlin 2.1.10 Compiler installed ✓"
 
+# ─── Symlink Mono C# compiler ───
+RUN (command -v mono-csc >/dev/null && ln -sf $(which mono-csc) /usr/local/bin/csc) || \
+    (command -v mcs >/dev/null && ln -sf $(which mcs) /usr/local/bin/csc) || true
+
 # ─── Verify all expected binary paths exist ───
-RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc; do \
+RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono; do \
       command -v "$bin" || { echo "MISSING: $bin"; exit 1; }; \
     done && echo "All target language toolchains verified ✓"
 

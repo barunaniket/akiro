@@ -15,6 +15,7 @@ static LANG_PYTHON: AtomicU64 = AtomicU64::new(0);
 static LANG_PYPY: AtomicU64 = AtomicU64::new(0);
 static LANG_JAVA: AtomicU64 = AtomicU64::new(0);
 static LANG_KOTLIN: AtomicU64 = AtomicU64::new(0);
+static LANG_CSHARP: AtomicU64 = AtomicU64::new(0);
 static LANG_C: AtomicU64 = AtomicU64::new(0);
 static LANG_JS: AtomicU64 = AtomicU64::new(0);
 static LANG_TS: AtomicU64 = AtomicU64::new(0);
@@ -54,6 +55,7 @@ pub fn record_job(
         "pypy" | "pypy3" => LANG_PYPY.fetch_add(1, Ordering::Relaxed),
         "java" => LANG_JAVA.fetch_add(1, Ordering::Relaxed),
         "kotlin" | "kt" => LANG_KOTLIN.fetch_add(1, Ordering::Relaxed),
+        "csharp" | "cs" | "c#" => LANG_CSHARP.fetch_add(1, Ordering::Relaxed),
         "c" => LANG_C.fetch_add(1, Ordering::Relaxed),
         "javascript" | "js" => LANG_JS.fetch_add(1, Ordering::Relaxed),
         "typescript" | "ts" => LANG_TS.fetch_add(1, Ordering::Relaxed),
@@ -106,6 +108,7 @@ pub fn render_prometheus(
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"pypy3\"}} {}\n", LANG_PYPY.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"java\"}} {}\n", LANG_JAVA.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"kotlin\"}} {}\n", LANG_KOTLIN.load(Ordering::Relaxed)));
+    out.push_str(&format!("akiro_jobs_by_language_total{{language=\"csharp\"}} {}\n", LANG_CSHARP.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"c\"}} {}\n", LANG_C.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"javascript\"}} {}\n", LANG_JS.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"typescript\"}} {}\n", LANG_TS.load(Ordering::Relaxed)));
