@@ -69,7 +69,8 @@ pub fn create_router(
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
 
     let public_routes = Router::new()
-        .route("/health", get(handlers::health));
+        .route("/health", get(handlers::health))
+        .route("/metrics", get(handlers::metrics));
 
     Router::new()
         .merge(protected_routes)

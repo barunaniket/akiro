@@ -203,6 +203,10 @@ impl ExecutionPipeline {
             result.verdict = JudgeVerdict::Accepted;
         }
 
+        let passed = result.test_results.iter().filter(|t| t.status == JudgeVerdict::Accepted).count();
+        let failed = result.test_results.len().saturating_sub(passed);
+        crate::metrics::record_job(&request.language, &result.verdict, result.total_cpu_time_ms, passed, failed);
+
         let _ = progress.as_ref().map(|p| p.send(ProgressEvent::Finished {
             verdict: result.verdict,
         }));

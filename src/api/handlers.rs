@@ -133,6 +133,35 @@ pub async fn health(
     })
 }
 
+pub async fn metrics(
+    State(state): State<Arc<ApiState>>,
+) -> impl axum::response::IntoResponse {
+    let local_total = state.pool.num_workers();
+    let local_idle = state.pool.idle_workers();
+    let local_busy = state.pool.busy_workers();
+
+    let (total_workers, idle_workers, busy_workers) = match &state.redis_url {
+        Some(url) => get_cluster_stats(url, local_total, local_idle, local_busy),
+        None => (local_total, local_idle, local_busy),
+    };
+
+    let body = crate::metrics::render_prometheus(
+        total_workers,
+        idle_workers,
+        busy_workers,
+        state.pool.queued_jobs(),
+        state.start_time.elapsed().as_secs(),
+    );
+
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+}
+
 async fn submit_to_cluster(
     redis_url: &str,
     request: &JobRequest,

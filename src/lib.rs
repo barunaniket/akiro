@@ -3,6 +3,7 @@ pub mod languages;
 pub mod orchestrator;
 pub mod api;
 pub mod queue;
+pub mod metrics;
 
 #[cfg(target_os = "linux")]
 pub use sandbox::{Sandbox, SandboxConfig, SandboxError, ExecutionResult, SandboxStatus};
