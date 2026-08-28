@@ -72,8 +72,16 @@ RUN curl -fsSL https://bun.sh/install | bash && \
     cp /root/.bun/bin/bun /usr/local/bin/bun && \
     chmod +x /usr/local/bin/bun
 
+# ─── Install Kotlin Compiler ───
+RUN curl -fsSL https://github.com/JetBrains/kotlin/releases/download/v2.1.10/kotlin-compiler-2.1.10.zip -o /tmp/kotlin.zip && \
+    unzip -q /tmp/kotlin.zip -d /opt && \
+    ln -s /opt/kotlinc/bin/kotlinc /usr/local/bin/kotlinc && \
+    ln -s /opt/kotlinc/bin/kotlin /usr/local/bin/kotlin && \
+    rm /tmp/kotlin.zip && \
+    echo "Kotlin 2.1.10 Compiler installed ✓"
+
 # ─── Verify all expected binary paths exist ───
-RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun; do \
+RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc; do \
       command -v "$bin" || { echo "MISSING: $bin"; exit 1; }; \
     done && echo "All target language toolchains verified ✓"
 
