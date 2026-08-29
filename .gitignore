@@ -10,3 +10,7 @@ Cargo.lock
 .vscode/
 *.iml
 docs/DUAL_TOKEN_ARCHITECTURE.md
+docs/LIVE_AZURE_INSPECTION_REPORT.md
+docs/AKIRO_DEEP_INSPECTION.md
+
+
