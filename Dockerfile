@@ -66,7 +66,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Embedded Redis Queue
     redis-server \
     # Utilities
-    procps curl ca-certificates unzip iptables \
+    procps curl ca-certificates unzip xz-utils iptables \
     && rm -rf /var/lib/apt/lists/*
 
 # ─── Install Bun for JS / TS ───
@@ -86,8 +86,15 @@ RUN curl -fsSL https://github.com/JetBrains/kotlin/releases/download/v2.1.10/kot
 RUN (command -v mono-csc >/dev/null && ln -sf $(which mono-csc) /usr/local/bin/csc) || \
     (command -v mcs >/dev/null && ln -sf $(which mcs) /usr/local/bin/csc) || true
 
+# ─── Install Zig Compiler ───
+RUN curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o /tmp/zig.tar.xz && \
+    tar -xf /tmp/zig.tar.xz -C /opt && \
+    ln -s /opt/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig && \
+    rm /tmp/zig.tar.xz && \
+    echo "Zig 0.13.0 Compiler installed ✓"
+
 # ─── Verify all expected binary paths exist ───
-RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono; do \
+RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono zig; do \
       command -v "$bin" || { echo "MISSING: $bin"; exit 1; }; \
     done && echo "All target language toolchains verified ✓"
 

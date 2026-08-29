@@ -10,6 +10,7 @@ pub mod javascript;
 pub mod sql;
 pub mod kotlin;
 pub mod csharp;
+pub mod zig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportedLanguage {
@@ -22,6 +23,7 @@ pub enum SupportedLanguage {
     Java,
     Kotlin,
     CSharp,
+    Zig,
     JavaScript,
     TypeScript,
     Sql,
@@ -39,6 +41,7 @@ impl SupportedLanguage {
             SupportedLanguage::Java => Box::new(java::Java),
             SupportedLanguage::Kotlin => Box::new(kotlin::Kotlin),
             SupportedLanguage::CSharp => Box::new(csharp::CSharp),
+            SupportedLanguage::Zig => Box::new(zig::Zig),
             SupportedLanguage::JavaScript => Box::new(javascript::JavaScript),
             SupportedLanguage::TypeScript => Box::new(javascript::TypeScript),
             SupportedLanguage::Sql => Box::new(sql::Sql),
@@ -56,6 +59,7 @@ impl SupportedLanguage {
             "java" => Some(SupportedLanguage::Java),
             "kotlin" | "kt" => Some(SupportedLanguage::Kotlin),
             "csharp" | "cs" | "c#" => Some(SupportedLanguage::CSharp),
+            "zig" => Some(SupportedLanguage::Zig),
             "javascript" | "js" => Some(SupportedLanguage::JavaScript),
             "typescript" | "ts" => Some(SupportedLanguage::TypeScript),
             "sql" | "sqlite" | "sqlite3" => Some(SupportedLanguage::Sql),
