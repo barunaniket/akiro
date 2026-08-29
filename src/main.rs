@@ -62,6 +62,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    tokio::spawn(async {
+        if let Ok(mut sigchld) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()) {
+            while sigchld.recv().await.is_some() {
+                let mut status = 0;
+                unsafe {
+                    while libc::waitpid(-1, &mut status, libc::WNOHANG) > 0 {}
+                }
+            }
+        }
+    });
+
     let enabled_languages = args.languages.as_deref().map(|l| {
         let set = akiro::languages::SupportedLanguage::parse_whitelist(l);
         let names: Vec<&str> = set.iter().map(|s| s.as_str()).collect();
