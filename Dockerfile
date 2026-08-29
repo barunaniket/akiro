@@ -55,6 +55,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # C / C++
     gcc g++ libc6-dev \
+    # Rust & Go
+    rustc golang-go \
     # Python & PyPy3
     python3 pypy3 \
     # Java (headless JDK — includes javac + java)
@@ -118,7 +120,7 @@ RUN ARCH=$(uname -m) && \
     echo "Dart SDK ($DART_ARCH) installed ✓"
 
 # ─── Verify all expected binary paths exist ───
-RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono zig ruby php ghc dart scalac scala; do \
+RUN set -e; for bin in gcc g++ rustc go python3 pypy3 javac java sqlite3 bun kotlinc csc mono zig ruby php ghc dart scalac scala; do \
       command -v "$bin" || { echo "MISSING: $bin"; exit 1; }; \
     done && echo "All target language toolchains verified ✓"
 

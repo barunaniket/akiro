@@ -11,13 +11,23 @@ fn default_job_id() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn default_time_limit_ms() -> u64 {
+    2000
+}
+
+fn default_memory_limit_bytes() -> u64 {
+    256 * 1024 * 1024
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRequest {
     #[serde(default = "default_job_id")]
     pub job_id: String,
     pub language: String,
     pub source_code: String,
+    #[serde(default = "default_time_limit_ms")]
     pub time_limit_ms: u64,
+    #[serde(default = "default_memory_limit_bytes")]
     pub memory_limit_bytes: u64,
     pub test_cases: Vec<TestCase>,
     #[serde(default)]

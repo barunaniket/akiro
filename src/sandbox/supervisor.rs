@@ -132,18 +132,24 @@ impl ProcessSupervisor {
         let mut status: c_int = 0;
         let mut rusage: libc::rusage = unsafe { std::mem::zeroed() };
 
-        unsafe {
-            let ret = wait4(self.pid.as_raw(), &mut status, 0, &mut rusage);
-            if ret == -1 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ECHILD) {
-                    return Ok(self.build_result(0, rusage));
+        for _ in 0..50 {
+            unsafe {
+                let ret = wait4(self.pid.as_raw(), &mut status, libc::WNOHANG, &mut rusage);
+                if ret > 0 {
+                    return Ok(self.build_result(status, rusage));
                 }
-                return Err(SupervisorError::Wait4Error(format!("wait4 failed: {}", err)));
+                if ret == -1 {
+                    let err = std::io::Error::last_os_error();
+                    if err.raw_os_error() == Some(libc::ECHILD) {
+                        return Ok(self.build_result(0, rusage));
+                    }
+                    return Err(SupervisorError::Wait4Error(format!("wait4 failed: {}", err)));
+                }
             }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
-        Ok(self.build_result(status, rusage))
+        Ok(self.build_result(libc::SIGKILL, rusage))
     }
 
     fn build_result(&self, status: c_int, rusage: libc::rusage) -> ExecutionResult {

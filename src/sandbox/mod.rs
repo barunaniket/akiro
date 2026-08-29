@@ -65,7 +65,18 @@ impl Sandbox {
         // Errors are non-fatal - continue without cgroups if not available
         let cgroup = CgroupManager::new(&config).ok();
 
-        match unsafe { fork()? } {
+        let mut fork_res = unsafe { fork() };
+        let mut retries = 0;
+        while let Err(nix::errno::Errno::EAGAIN) = fork_res {
+            if retries >= 10 {
+                break;
+            }
+            retries += 1;
+            tokio::time::sleep(tokio::time::Duration::from_millis(20 * retries)).await;
+            fork_res = unsafe { fork() };
+        }
+
+        match fork_res? {
             ForkResult::Parent { child } => {
                 pipes.close_parent_ends();
 
@@ -90,16 +101,18 @@ impl Sandbox {
                 let stdout_future = read_pipe_output(pipes.stdout_read, config.max_output_bytes);
                 let stderr_future = read_pipe_output(pipes.stderr_read, config.max_output_bytes);
 
-                let (supervise_result, _stdout, _stderr) = tokio::join!(
-                    supervisor.supervise(),
-                    stdout_future,
-                    stderr_future
-                );
-
+                let supervise_res = supervisor.supervise().await;
                 let _ = stdin_handle.await;
 
-                match (supervise_result, _stdout, _stderr) {
-                    (Ok(mut res), Ok(out), Ok(err)) => {
+                let drain_timeout = tokio::time::Duration::from_millis(250);
+                let stdout_res = tokio::time::timeout(drain_timeout, stdout_future).await;
+                let stderr_res = tokio::time::timeout(drain_timeout, stderr_future).await;
+
+                let out = stdout_res.ok().and_then(|r| r.ok()).unwrap_or_default();
+                let err = stderr_res.ok().and_then(|r| r.ok()).unwrap_or_default();
+
+                match supervise_res {
+                    Ok(mut res) => {
                         res.stdout = out;
                         res.stderr = err;
 
@@ -109,8 +122,7 @@ impl Sandbox {
 
                         Ok(res)
                     }
-                    (Ok(res), _, _) => Ok(res),
-                    (Err(e), _, _) => Err(SandboxError::SupervisorError(e)),
+                    Err(e) => Err(SandboxError::SupervisorError(e)),
                 }
             }
             ForkResult::Child => {

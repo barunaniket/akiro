@@ -78,19 +78,13 @@ impl CgroupManager {
         let memory_zswap_max_path = self.cgroup_path.join("memory.zswap.max");
         let _ = write_cgroup_file(&memory_zswap_max_path, "0");
 
-        // Limit process count dynamically based on language profile
-        let pids_max_path = self.cgroup_path.join("pids.max");
-        write_cgroup_file(&pids_max_path, &config.pids_limit.to_string())?;
-
-        // Optional: Set CPU limits if specified
-        // cpu.max format: "100000 1000000" = 100ms out of every 1s = 10% CPU
-        if config.time_limit_ms > 0 {
-            let cpu_max_path = self.cgroup_path.join("cpu.max");
-            let cpu_quota = (config.time_limit_ms * 1000).to_string(); // Convert to microseconds
-            let cpu_period = "1000000"; // 1 second period
-            write_cgroup_file(&cpu_max_path, &format!("{} {}", cpu_quota, cpu_period))?;
+        // Limit process count dynamically based on language profile (only for untrusted Run phase)
+        if config.profile != crate::sandbox::config::ExecutionProfile::Compile {
+            let pids_max_path = self.cgroup_path.join("pids.max");
+            write_cgroup_file(&pids_max_path, &config.pids_limit.to_string())?;
         }
 
+        // Process count and memory limits configured
         Ok(())
     }
 

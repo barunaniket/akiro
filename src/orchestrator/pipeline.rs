@@ -48,7 +48,7 @@ impl ExecutionPipeline {
                     .with_profile(crate::sandbox::config::ExecutionProfile::Compile)
                     .with_fs_isolation(false)
                     .with_network_isolation(false)
-                    .with_pids_limit(128)
+                    .with_pids_limit(1024)
                     .with_work_dir(temp_dir.path().to_path_buf());
 
                 let compile_result = Sandbox::execute(compile_config)

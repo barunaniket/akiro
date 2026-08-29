@@ -155,31 +155,42 @@ impl RedisConsumer {
                                                             };
 
                                                             let pool = self.pool.clone();
-                                                            let mut task_con = async_con.clone();
+                                                            let client_clone = client.clone();
                                                             let stream_key = self.stream_key.clone();
                                                             let consumer_group = self.consumer_group.clone();
 
                                                             tokio::spawn(async move {
                                                                 tracing::info!("Processing job {} concurrently from Redis", request.job_id);
 
-                                                                match pool.submit(request.clone(), None).await {
-                                                                    Ok(result) => {
-                                                                        let result_key = format!("judge:results:{}", request.job_id);
-                                                                        let result_json = serde_json::to_string(&result).unwrap_or_default();
-
-                                                                        // Pipeline SET + XACK in a single round-trip
-                                                                        let _: Result<(), _> = redis::pipe()
-                                                                            .cmd("SET").arg(&result_key).arg(&result_json).arg("EX").arg(86400)
-                                                                            .cmd("XACK").arg(&stream_key).arg(&consumer_group).arg(&msg_id)
-                                                                            .query_async(&mut task_con)
-                                                                            .await;
-
-                                                                        tracing::info!("Job {} completed and result stored", request.job_id);
-                                                                    }
+                                                                let res_to_publish = match pool.submit(request.clone(), None).await {
+                                                                    Ok(result) => result,
                                                                     Err(e) => {
                                                                         tracing::error!("Job {} failed: {}", request.job_id, e);
+                                                                        crate::orchestrator::JobResult {
+                                                                            job_id: request.job_id.clone(),
+                                                                            verdict: crate::orchestrator::JudgeVerdict::RuntimeError,
+                                                                            total_cpu_time_ms: 0,
+                                                                            peak_memory_kb: 0,
+                                                                            compile_output: None,
+                                                                            test_results: vec![],
+                                                                        }
                                                                     }
+                                                                };
+
+                                                                let result_key = format!("judge:results:{}", request.job_id);
+                                                                let result_json = serde_json::to_string(&res_to_publish).unwrap_or_default();
+
+                                                                if let Ok(mut task_con) = client_clone.get_multiplexed_tokio_connection().await {
+                                                                    let _: Result<(), _> = redis::pipe()
+                                                                        .cmd("SET").arg(&result_key).arg(&result_json).arg("EX").arg(86400)
+                                                                        .cmd("XACK").arg(&stream_key).arg(&consumer_group).arg(&msg_id)
+                                                                        .query_async(&mut task_con)
+                                                                        .await;
+                                                                    tracing::info!("Job {} completed and result stored in Redis", request.job_id);
+                                                                } else {
+                                                                    tracing::error!("Failed to acquire Redis connection to publish result for job {}", request.job_id);
                                                                 }
+
                                                                 drop(permit);
                                                             });
                                                         }
