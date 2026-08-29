@@ -56,6 +56,19 @@ docker run -d \
   akiro
 ```
 
+### Mode C: Custom Language Whitelist Mode
+Restricts the judge to only accept specific permitted languages:
+
+```bash
+docker run -d \
+  --name akiro \
+  --privileged \
+  -p 8080:8080 \
+  -e ENABLED_LANGUAGES="cpp,python,java,rust" \
+  --restart unless-stopped \
+  akiro
+```
+
 ---
 
 ## 🧪 3. Verify Your Setup
@@ -126,6 +139,7 @@ Akiro can be customized via command-line flags or environment variables:
 | `--port <PORT>` | `JUDGE_PORT` | `8080` | TCP port for the REST and WebSocket gateway |
 | `--workers <NUM>`| `JUDGE_WORKERS`| `auto` | Number of parallel execution workers (default: matching CPU cores) |
 | `--secret <TOKEN>`| `JUDGE_SECRET` | `""` | Dual-token authentication token for HTTP requests (`X-Judge-Secret`) |
+| `--languages <LIST>`| `ENABLED_LANGUAGES`| `""` (all 18) | Comma-separated language whitelist (e.g. `cpp,python,java,rust`) |
 | `--redis <URL>` | `REDIS_URL` | `""` | Distributed Redis Streams endpoint for cluster mesh worker scaling |
 | `--cluster-token <TOKEN>` | `CLUSTER_TOKEN` | `""` | Redis auth password for distributed worker nodes |
 

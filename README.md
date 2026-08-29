@@ -108,6 +108,11 @@ docker build -t akiro .
 # 3. Start as Standalone Gateway + Worker:
 docker run -d --name akiro --privileged -p 8080:8080 --restart unless-stopped akiro
 
+# (Optional) Restrict to a custom language whitelist:
+docker run -d --name akiro --privileged -p 8080:8080 \
+  -e ENABLED_LANGUAGES="cpp,python,java,rust" \
+  --restart unless-stopped akiro
+
 # (Optional) Join as a Distributed Worker Node in a cluster:
 docker run -d --name akiro-worker --privileged --restart unless-stopped akiro \
   --mode worker --redis "redis://:CLUSTER_TOKEN@LEADER_IP:6379" --workers auto
@@ -120,7 +125,9 @@ docker run -d --name akiro-worker --privileged --restart unless-stopped akiro \
 git clone https://github.com/barunaniket/akiro.git
 cd akiro
 cargo build --release
-sudo ./target/release/akiro --mode all --port 8080
+
+# Run with optional language whitelist
+sudo ./target/release/akiro --mode all --port 8080 --languages cpp,python,java,rust
 ```
 
 ---

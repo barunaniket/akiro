@@ -29,6 +29,32 @@ Akiro natively supports **18 programming languages and runtime engines**, pre-co
 
 ---
 
+## 🔒 Custom Language Subsets & Whitelisting
+
+If you want your Akiro instance to only accept a specific subset of languages (for instance, restricting a contest to C++, Python, Java, and Rust):
+
+### 1. Via Environment Variable (`ENABLED_LANGUAGES`)
+```bash
+docker run -d --name akiro --privileged -p 8080:8080 \
+  -e ENABLED_LANGUAGES="cpp,python,java,rust" \
+  akiro
+```
+
+### 2. Via CLI Flag (`--languages`)
+```bash
+./akiro --mode all --port 8080 --languages cpp,python,java,rust
+```
+
+When a language is submitted that is not in the active whitelist, Akiro immediately returns a `403 Forbidden` response without consuming sandbox execution resources:
+```json
+{
+  "error": "Language 'ruby' is disabled on this judge instance",
+  "enabled_languages": ["cpp", "java", "python", "rust"]
+}
+```
+
+---
+
 ## 💻 Sample Code for All 18 Languages
 
 ### 1. C++ (`cpp`)

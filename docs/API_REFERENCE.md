@@ -98,6 +98,28 @@ X-Judge-Secret: <YOUR_SECRET_TOKEN>
 
 ---
 
+---
+
+## 🚦 HTTP Status Codes & Error Responses
+
+| Status Code | Reason | Description |
+| :--- | :--- | :--- |
+| **`200 OK`** | Success | Code was executed; full verdict results returned in body. |
+| **`400 Bad Request`** | Invalid Request | Missing test cases, invalid JSON payload, or unsupported language. |
+| **`401 Unauthorized`** | Auth Failure | Missing or invalid `X-Judge-Secret` / Bearer token. |
+| **`403 Forbidden`** | Language Disabled | The requested language is excluded by the server's `ENABLED_LANGUAGES` whitelist. |
+| **`503 Service Unavailable`** | Backpressure | Server queue is saturated (tokio backpressure buffer full). |
+
+#### Example 403 Forbidden (Language Disabled by Whitelist):
+```json
+{
+  "error": "Language 'ruby' is disabled on this judge instance",
+  "enabled_languages": ["c", "cpp", "java", "python", "rust"]
+}
+```
+
+---
+
 ## 🏆 Verdict Definitions
 
 | Verdict | Meaning |
