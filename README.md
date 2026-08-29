@@ -281,7 +281,6 @@ Detailed architectural, operational, and development documentation can be found 
 - 🌐 [`docs/LANGUAGES.md`](docs/LANGUAGES.md): Complete 18-language guide, compiler flags, and competitive programming templates.
 - 📖 [`docs/DUAL_TOKEN_ARCHITECTURE.md`](docs/DUAL_TOKEN_ARCHITECTURE.md): Multi-node cluster scaling, dual tokens (`JUDGE_SECRET` & `CLUSTER_TOKEN`), and volunteer joining.
 - 📖 [`docs/HORIZONTAL_SCALING.md`](docs/HORIZONTAL_SCALING.md): Distributed Redis Streams backpressure and worker mesh topology.
-- 📖 [`docs/COLAB_SETUP.md`](docs/COLAB_SETUP.md): Google Colab GPU/CPU worker node integration guide.
 - 📖 [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md): Security audit, defense-in-depth verification, and attack resilience tests.
 
 ---
