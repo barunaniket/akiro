@@ -14,6 +14,8 @@ pub mod zig;
 pub mod ruby;
 pub mod php;
 pub mod haskell;
+pub mod dart;
+pub mod scala;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportedLanguage {
@@ -30,6 +32,8 @@ pub enum SupportedLanguage {
     Ruby,
     Php,
     Haskell,
+    Dart,
+    Scala,
     JavaScript,
     TypeScript,
     Sql,
@@ -51,6 +55,8 @@ impl SupportedLanguage {
             SupportedLanguage::Ruby => Box::new(ruby::Ruby),
             SupportedLanguage::Php => Box::new(php::Php),
             SupportedLanguage::Haskell => Box::new(haskell::Haskell),
+            SupportedLanguage::Dart => Box::new(dart::Dart),
+            SupportedLanguage::Scala => Box::new(scala::Scala),
             SupportedLanguage::JavaScript => Box::new(javascript::JavaScript),
             SupportedLanguage::TypeScript => Box::new(javascript::TypeScript),
             SupportedLanguage::Sql => Box::new(sql::Sql),
@@ -72,6 +78,8 @@ impl SupportedLanguage {
             "ruby" | "rb" => Some(SupportedLanguage::Ruby),
             "php" => Some(SupportedLanguage::Php),
             "haskell" | "hs" | "ghc" => Some(SupportedLanguage::Haskell),
+            "dart" => Some(SupportedLanguage::Dart),
+            "scala" | "scalac" => Some(SupportedLanguage::Scala),
             "javascript" | "js" => Some(SupportedLanguage::JavaScript),
             "typescript" | "ts" => Some(SupportedLanguage::TypeScript),
             "sql" | "sqlite" | "sqlite3" => Some(SupportedLanguage::Sql),

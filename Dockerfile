@@ -67,6 +67,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     php-cli \
     # Haskell (Glasgow Haskell Compiler)
     ghc \
+    # Scala (Compiler & runtime)
+    scala \
     # SQL (SQLite3)
     sqlite3 \
     # Embedded Redis Queue
@@ -103,8 +105,20 @@ RUN ARCH=$(uname -m) && \
     rm /tmp/zig.tar.xz && \
     echo "Zig 0.13.0 ($ZIG_ARCH) Compiler installed ✓"
 
+# ─── Install Dart SDK (Multi-Arch: x64 & arm64) ───
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then DART_ARCH="x64"; \
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then DART_ARCH="arm64"; \
+    else echo "Unsupported architecture for Dart: $ARCH" && exit 1; fi && \
+    curl -fsSL "https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-${DART_ARCH}-release.zip" -o /tmp/dart.zip && \
+    unzip -q /tmp/dart.zip -d /opt && \
+    ln -s /opt/dart-sdk/bin/dart /usr/local/bin/dart && \
+    ln -s /opt/dart-sdk/bin/dart /usr/bin/dart && \
+    rm /tmp/dart.zip && \
+    echo "Dart SDK ($DART_ARCH) installed ✓"
+
 # ─── Verify all expected binary paths exist ───
-RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono zig ruby php ghc; do \
+RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono zig ruby php ghc dart scalac scala; do \
       command -v "$bin" || { echo "MISSING: $bin"; exit 1; }; \
     done && echo "All target language toolchains verified ✓"
 

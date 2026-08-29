@@ -20,6 +20,8 @@ static LANG_ZIG: AtomicU64 = AtomicU64::new(0);
 static LANG_RUBY: AtomicU64 = AtomicU64::new(0);
 static LANG_PHP: AtomicU64 = AtomicU64::new(0);
 static LANG_HASKELL: AtomicU64 = AtomicU64::new(0);
+static LANG_DART: AtomicU64 = AtomicU64::new(0);
+static LANG_SCALA: AtomicU64 = AtomicU64::new(0);
 static LANG_C: AtomicU64 = AtomicU64::new(0);
 static LANG_JS: AtomicU64 = AtomicU64::new(0);
 static LANG_TS: AtomicU64 = AtomicU64::new(0);
@@ -64,6 +66,8 @@ pub fn record_job(
         "ruby" | "rb" => LANG_RUBY.fetch_add(1, Ordering::Relaxed),
         "php" => LANG_PHP.fetch_add(1, Ordering::Relaxed),
         "haskell" | "hs" | "ghc" => LANG_HASKELL.fetch_add(1, Ordering::Relaxed),
+        "dart" => LANG_DART.fetch_add(1, Ordering::Relaxed),
+        "scala" | "scalac" => LANG_SCALA.fetch_add(1, Ordering::Relaxed),
         "c" => LANG_C.fetch_add(1, Ordering::Relaxed),
         "javascript" | "js" => LANG_JS.fetch_add(1, Ordering::Relaxed),
         "typescript" | "ts" => LANG_TS.fetch_add(1, Ordering::Relaxed),
@@ -121,6 +125,8 @@ pub fn render_prometheus(
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"ruby\"}} {}\n", LANG_RUBY.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"php\"}} {}\n", LANG_PHP.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"haskell\"}} {}\n", LANG_HASKELL.load(Ordering::Relaxed)));
+    out.push_str(&format!("akiro_jobs_by_language_total{{language=\"dart\"}} {}\n", LANG_DART.load(Ordering::Relaxed)));
+    out.push_str(&format!("akiro_jobs_by_language_total{{language=\"scala\"}} {}\n", LANG_SCALA.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"c\"}} {}\n", LANG_C.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"javascript\"}} {}\n", LANG_JS.load(Ordering::Relaxed)));
     out.push_str(&format!("akiro_jobs_by_language_total{{language=\"typescript\"}} {}\n", LANG_TS.load(Ordering::Relaxed)));
