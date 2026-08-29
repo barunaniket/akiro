@@ -210,14 +210,32 @@ pub async fn submit(
     Json(request): Json<JobRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     // Validate language
-    if crate::languages::SupportedLanguage::from_str(&request.language).is_none() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": format!("Unsupported language: {}", request.language),
-                "supported": ["c", "cpp", "python", "pypy", "javascript", "typescript", "sql", "java"]
-            })),
-        );
+    let lang = match crate::languages::SupportedLanguage::from_str(&request.language) {
+        Some(l) => l,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("Unsupported language: {}", request.language),
+                    "supported": crate::languages::SupportedLanguage::all_canonical_names()
+                })),
+            );
+        }
+    };
+
+    // Check language whitelist if configured
+    if let Some(whitelist) = &state.enabled_languages {
+        if !whitelist.contains(&lang) {
+            let mut enabled_list: Vec<&'static str> = whitelist.iter().map(|l| l.as_str()).collect();
+            enabled_list.sort();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": format!("Language '{}' is disabled on this judge instance", request.language),
+                    "enabled_languages": enabled_list
+                })),
+            );
+        }
     }
 
     // Validate test cases exist

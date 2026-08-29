@@ -40,6 +40,10 @@ struct Args {
     #[arg(long, env = "CLUSTER_TOKEN")]
     token: Option<String>,
 
+    /// Optional comma-separated list of enabled languages (e.g. "cpp,python,java,rust")
+    #[arg(long, env = "ENABLED_LANGUAGES")]
+    languages: Option<String>,
+
     /// Number of worker threads (e.g. 8, auto)
     #[arg(long, env = "JUDGE_WORKERS")]
     workers: Option<String>,
@@ -58,6 +62,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    let enabled_languages = args.languages.as_deref().map(|l| {
+        let set = akiro::languages::SupportedLanguage::parse_whitelist(l);
+        let names: Vec<&str> = set.iter().map(|s| s.as_str()).collect();
+        tracing::info!("Language whitelist enabled ({} languages): {:?}", set.len(), names);
+        Arc::new(set)
+    });
+
     let num_workers = match args.workers.as_deref() {
         Some("auto") | Some("") | None => None,
         Some(s) => match s.parse::<usize>() {
@@ -75,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.mode {
         RunMode::Server => {
             tracing::info!("Starting Akiro in SERVER mode on port {}", args.port);
-            run_server(pool, receiver, args.port, args.secret).await?;
+            run_server(pool, receiver, args.port, args.secret, enabled_languages).await?;
         }
         RunMode::Worker => {
             tracing::info!("Starting Akiro in WORKER mode (Redis consumer)");
@@ -83,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         RunMode::All => {
             tracing::info!("Starting Akiro in ALL mode (server + worker pool)");
-            run_all(pool, receiver, args.port, args.secret, &args.redis).await?;
+            run_all(pool, receiver, args.port, args.secret, &args.redis, enabled_languages).await?;
         }
     }
 
@@ -95,6 +106,7 @@ async fn run_server(
     receiver: tokio::sync::mpsc::UnboundedReceiver<JobEnvelope>,
     port: u16,
     secret: Option<String>,
+    enabled_languages: Option<Arc<std::collections::HashSet<akiro::languages::SupportedLanguage>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Spawn worker tasks
     let pool_workers = pool.clone();
@@ -103,7 +115,7 @@ async fn run_server(
     });
 
     // Start HTTP server
-    let router = api::create_router(pool, secret, None);
+    let router = api::create_router(pool, secret, None, enabled_languages);
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
 
     tracing::info!("HTTP server listening on port {}", port);
@@ -138,6 +150,7 @@ async fn run_all(
     port: u16,
     secret: Option<String>,
     redis_url: &str,
+    enabled_languages: Option<Arc<std::collections::HashSet<akiro::languages::SupportedLanguage>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Spawn worker tasks
     let pool_workers = pool.clone();
@@ -149,7 +162,7 @@ async fn run_all(
     let pool_http = pool.clone();
     let redis_url_clone = redis_url.to_string();
     tokio::spawn(async move {
-        let router = api::create_router(pool_http, secret, Some(redis_url_clone));
+        let router = api::create_router(pool_http, secret, Some(redis_url_clone), enabled_languages);
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
             .await
             .expect("Failed to bind HTTP listener");

@@ -20,6 +20,7 @@ pub struct ApiState {
     pub secret: Option<String>,
     pub start_time: std::time::Instant,
     pub redis_url: Option<String>,
+    pub enabled_languages: Option<Arc<std::collections::HashSet<crate::languages::SupportedLanguage>>>,
 }
 
 async fn auth_middleware(
@@ -55,12 +56,14 @@ pub fn create_router(
     pool: Arc<JudgeWorkerPool>,
     secret: Option<String>,
     redis_url: Option<String>,
+    enabled_languages: Option<Arc<std::collections::HashSet<crate::languages::SupportedLanguage>>>,
 ) -> Router {
     let state = Arc::new(ApiState {
         pool,
         secret,
         start_time: std::time::Instant::now(),
         redis_url,
+        enabled_languages,
     });
 
     let protected_routes = Router::new()

@@ -17,7 +17,7 @@ pub mod haskell;
 pub mod dart;
 pub mod scala;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SupportedLanguage {
     C,
     Cpp,
@@ -86,6 +86,50 @@ impl SupportedLanguage {
             _ => None,
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SupportedLanguage::C => "c",
+            SupportedLanguage::Cpp => "cpp",
+            SupportedLanguage::Rust => "rust",
+            SupportedLanguage::Go => "go",
+            SupportedLanguage::Python => "python",
+            SupportedLanguage::PyPy => "pypy",
+            SupportedLanguage::Java => "java",
+            SupportedLanguage::Kotlin => "kotlin",
+            SupportedLanguage::CSharp => "csharp",
+            SupportedLanguage::Zig => "zig",
+            SupportedLanguage::Ruby => "ruby",
+            SupportedLanguage::Php => "php",
+            SupportedLanguage::Haskell => "haskell",
+            SupportedLanguage::Dart => "dart",
+            SupportedLanguage::Scala => "scala",
+            SupportedLanguage::JavaScript => "javascript",
+            SupportedLanguage::TypeScript => "typescript",
+            SupportedLanguage::Sql => "sql",
+        }
+    }
+
+    pub fn all_canonical_names() -> &'static [&'static str] {
+        &[
+            "c", "cpp", "rust", "go", "python", "pypy", "java", "kotlin",
+            "csharp", "zig", "ruby", "php", "haskell", "dart", "scala",
+            "javascript", "typescript", "sql",
+        ]
+    }
+
+    pub fn parse_whitelist(input: &str) -> std::collections::HashSet<Self> {
+        let mut set = std::collections::HashSet::new();
+        for item in input.split(',') {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() {
+                if let Some(lang) = Self::from_str(trimmed) {
+                    set.insert(lang);
+                }
+            }
+        }
+        set
+    }
 }
 
 pub trait LanguageRunner: Send + Sync {
@@ -144,5 +188,17 @@ mod tests {
 
         let sql_runner = SupportedLanguage::Sql.get_runner();
         assert!(!sql_runner.is_compiled());
+    }
+
+    #[test]
+    fn test_language_parse_whitelist() {
+        let whitelist = SupportedLanguage::parse_whitelist("cpp, python, java, rust");
+        assert_eq!(whitelist.len(), 4);
+        assert!(whitelist.contains(&SupportedLanguage::Cpp));
+        assert!(whitelist.contains(&SupportedLanguage::Python));
+        assert!(whitelist.contains(&SupportedLanguage::Java));
+        assert!(whitelist.contains(&SupportedLanguage::Rust));
+        assert!(!whitelist.contains(&SupportedLanguage::Haskell));
+        assert!(!whitelist.contains(&SupportedLanguage::Ruby));
     }
 }

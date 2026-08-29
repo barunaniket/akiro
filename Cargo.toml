@@ -30,6 +30,8 @@ redis = { version = "0.25", features = ["tokio-comp", "streams", "connection-man
 futures-util = "0.3"
 tokio-stream = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.5"
 
 [dev-dependencies]
