@@ -12,6 +12,7 @@ pub mod kotlin;
 pub mod csharp;
 pub mod zig;
 pub mod ruby;
+pub mod php;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportedLanguage {
@@ -26,6 +27,7 @@ pub enum SupportedLanguage {
     CSharp,
     Zig,
     Ruby,
+    Php,
     JavaScript,
     TypeScript,
     Sql,
@@ -45,6 +47,7 @@ impl SupportedLanguage {
             SupportedLanguage::CSharp => Box::new(csharp::CSharp),
             SupportedLanguage::Zig => Box::new(zig::Zig),
             SupportedLanguage::Ruby => Box::new(ruby::Ruby),
+            SupportedLanguage::Php => Box::new(php::Php),
             SupportedLanguage::JavaScript => Box::new(javascript::JavaScript),
             SupportedLanguage::TypeScript => Box::new(javascript::TypeScript),
             SupportedLanguage::Sql => Box::new(sql::Sql),
@@ -64,6 +67,7 @@ impl SupportedLanguage {
             "csharp" | "cs" | "c#" => Some(SupportedLanguage::CSharp),
             "zig" => Some(SupportedLanguage::Zig),
             "ruby" | "rb" => Some(SupportedLanguage::Ruby),
+            "php" => Some(SupportedLanguage::Php),
             "javascript" | "js" => Some(SupportedLanguage::JavaScript),
             "typescript" | "ts" => Some(SupportedLanguage::TypeScript),
             "sql" | "sqlite" | "sqlite3" => Some(SupportedLanguage::Sql),
