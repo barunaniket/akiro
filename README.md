@@ -283,7 +283,6 @@ Detailed architectural, operational, and development documentation can be found 
 - 📖 [`docs/HORIZONTAL_SCALING.md`](docs/HORIZONTAL_SCALING.md): Distributed Redis Streams backpressure and worker mesh topology.
 - 📖 [`docs/COLAB_SETUP.md`](docs/COLAB_SETUP.md): Google Colab GPU/CPU worker node integration guide.
 - 📖 [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md): Security audit, defense-in-depth verification, and attack resilience tests.
-- 📖 [`docs/PHASE2_IMPLEMENTATION.md`](docs/PHASE2_IMPLEMENTATION.md) – [`docs/PHASE5_IMPLEMENTATION.md`](docs/PHASE5_IMPLEMENTATION.md): Sandbox design milestones and kernel isolation architecture.
 
 ---
 
