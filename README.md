@@ -274,13 +274,16 @@ curl -X POST https://<HOST>/api/v1/submit \
 
 ## 📚 Documentation Index
 
-Detailed architectural and operational documentation can be found in the [`docs/`](docs/) directory:
+Detailed architectural, operational, and development documentation can be found in the [`docs/`](docs/) directory:
 
-- 📖 [`docs/DUAL_TOKEN_ARCHITECTURE.md`](docs/DUAL_TOKEN_ARCHITECTURE.md): Cluster scaling, tokens, and volunteer joining guide.
-- 📖 [`docs/HORIZONTAL_SCALING.md`](docs/HORIZONTAL_SCALING.md): Redis Streams worker mesh topology.
-- 📖 [`docs/COLAB_SETUP.md`](docs/COLAB_SETUP.md): Google Colab GPU/CPU worker node integration.
-- 📖 [`docs/PHASE2_IMPLEMENTATION.md`](docs/PHASE2_IMPLEMENTATION.md) – [`docs/PHASE5_IMPLEMENTATION.md`](docs/PHASE5_IMPLEMENTATION.md): Sandbox milestones and implementation chronicles.
-- 📖 [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md): Security audit and attack resilience verification.
+- 🚀 [`docs/QUICKSTART.md`](docs/QUICKSTART.md): 2-minute step-by-step setup, launch modes, and verification.
+- 📡 [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md): REST & WebSocket API specification, payload schemas, and client examples (Python, JS/TS, Go, Rust, cURL).
+- 🌐 [`docs/LANGUAGES.md`](docs/LANGUAGES.md): Complete 18-language guide, compiler flags, and competitive programming templates.
+- 📖 [`docs/DUAL_TOKEN_ARCHITECTURE.md`](docs/DUAL_TOKEN_ARCHITECTURE.md): Multi-node cluster scaling, dual tokens (`JUDGE_SECRET` & `CLUSTER_TOKEN`), and volunteer joining.
+- 📖 [`docs/HORIZONTAL_SCALING.md`](docs/HORIZONTAL_SCALING.md): Distributed Redis Streams backpressure and worker mesh topology.
+- 📖 [`docs/COLAB_SETUP.md`](docs/COLAB_SETUP.md): Google Colab GPU/CPU worker node integration guide.
+- 📖 [`docs/VALIDATION_REPORT.md`](docs/VALIDATION_REPORT.md): Security audit, defense-in-depth verification, and attack resilience tests.
+- 📖 [`docs/PHASE2_IMPLEMENTATION.md`](docs/PHASE2_IMPLEMENTATION.md) – [`docs/PHASE5_IMPLEMENTATION.md`](docs/PHASE5_IMPLEMENTATION.md): Sandbox design milestones and kernel isolation architecture.
 
 ---
 
