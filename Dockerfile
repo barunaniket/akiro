@@ -86,12 +86,16 @@ RUN curl -fsSL https://github.com/JetBrains/kotlin/releases/download/v2.1.10/kot
 RUN (command -v mono-csc >/dev/null && ln -sf $(which mono-csc) /usr/local/bin/csc) || \
     (command -v mcs >/dev/null && ln -sf $(which mcs) /usr/local/bin/csc) || true
 
-# ─── Install Zig Compiler ───
-RUN curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o /tmp/zig.tar.xz && \
+# ─── Install Zig Compiler (Multi-Arch: x86_64 & aarch64) ───
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then ZIG_ARCH="x86_64"; \
+    elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then ZIG_ARCH="aarch64"; \
+    else echo "Unsupported architecture for Zig: $ARCH" && exit 1; fi && \
+    curl -fsSL "https://ziglang.org/download/0.13.0/zig-linux-${ZIG_ARCH}-0.13.0.tar.xz" -o /tmp/zig.tar.xz && \
     tar -xf /tmp/zig.tar.xz -C /opt && \
-    ln -s /opt/zig-linux-x86_64-0.13.0/zig /usr/local/bin/zig && \
+    ln -s /opt/zig-linux-${ZIG_ARCH}-0.13.0/zig /usr/local/bin/zig && \
     rm /tmp/zig.tar.xz && \
-    echo "Zig 0.13.0 Compiler installed ✓"
+    echo "Zig 0.13.0 ($ZIG_ARCH) Compiler installed ✓"
 
 # ─── Verify all expected binary paths exist ───
 RUN set -e; for bin in gcc g++ python3 pypy3 javac java sqlite3 bun kotlinc csc mono zig; do \
