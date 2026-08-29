@@ -13,6 +13,7 @@ pub mod csharp;
 pub mod zig;
 pub mod ruby;
 pub mod php;
+pub mod haskell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportedLanguage {
@@ -28,6 +29,7 @@ pub enum SupportedLanguage {
     Zig,
     Ruby,
     Php,
+    Haskell,
     JavaScript,
     TypeScript,
     Sql,
@@ -48,6 +50,7 @@ impl SupportedLanguage {
             SupportedLanguage::Zig => Box::new(zig::Zig),
             SupportedLanguage::Ruby => Box::new(ruby::Ruby),
             SupportedLanguage::Php => Box::new(php::Php),
+            SupportedLanguage::Haskell => Box::new(haskell::Haskell),
             SupportedLanguage::JavaScript => Box::new(javascript::JavaScript),
             SupportedLanguage::TypeScript => Box::new(javascript::TypeScript),
             SupportedLanguage::Sql => Box::new(sql::Sql),
@@ -68,6 +71,7 @@ impl SupportedLanguage {
             "zig" => Some(SupportedLanguage::Zig),
             "ruby" | "rb" => Some(SupportedLanguage::Ruby),
             "php" => Some(SupportedLanguage::Php),
+            "haskell" | "hs" | "ghc" => Some(SupportedLanguage::Haskell),
             "javascript" | "js" => Some(SupportedLanguage::JavaScript),
             "typescript" | "ts" => Some(SupportedLanguage::TypeScript),
             "sql" | "sqlite" | "sqlite3" => Some(SupportedLanguage::Sql),
