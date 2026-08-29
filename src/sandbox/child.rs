@@ -1,4 +1,4 @@
-use libc::{c_int, execve as libc_execve};
+use libc::{c_char, c_int, execve as libc_execve};
 use nix::sys::resource::{setrlimit, Resource};
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -118,7 +118,7 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
             || libc::dup2(pipes.stdout_write, libc::STDOUT_FILENO) == -1
             || libc::dup2(pipes.stderr_write, libc::STDERR_FILENO) == -1
         {
-            libc::perror(b"dup2\0".as_ptr() as *const i8);
+            libc::perror(b"dup2\0".as_ptr() as *const c_char);
             libc::exit(1);
         }
 
@@ -184,7 +184,7 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
         args_cstr.push(CString::new(arg.as_bytes()).unwrap_or_default());
     }
 
-    let argv: Vec<*const i8> = args_cstr.iter().map(|s| s.as_ptr()).chain(std::iter::once(std::ptr::null())).collect();
+    let argv: Vec<*const c_char> = args_cstr.iter().map(|s| s.as_ptr()).chain(std::iter::once(std::ptr::null())).collect();
     let env_path = CString::new("PATH=/usr/bin:/bin:/usr/local/bin").unwrap();
     let env_lang = CString::new("LANG=C.UTF-8").unwrap();
     let env_home = CString::new("HOME=/tmp").unwrap();
@@ -199,7 +199,7 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
     let env_gocache = CString::new(format!("GOCACHE={}", gocache_dir.display())).unwrap();
     let env_gopath = CString::new(format!("GOPATH={}", gocache_dir.join("pkg").display())).unwrap();
 
-    let envp: Vec<*const i8> = vec![
+    let envp: Vec<*const c_char> = vec![
         env_path.as_ptr(), env_lang.as_ptr(), env_home.as_ptr(),
         env_gocache.as_ptr(), env_gopath.as_ptr(), std::ptr::null(),
     ];
@@ -220,7 +220,7 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
 
     unsafe {
         libc_execve(executable_cstr.as_ptr(), argv.as_ptr(), envp.as_ptr());
-        libc::perror(b"execve\0".as_ptr() as *const i8);
+        libc::perror(b"execve\0".as_ptr() as *const c_char);
         libc::exit(127);
     }
 }
@@ -256,13 +256,13 @@ fn apply_environment_sanitization() {
     unsafe {
         libc::clearenv();
         libc::setenv(
-            b"PATH\0".as_ptr() as *const i8,
-            b"/usr/bin:/bin\0".as_ptr() as *const i8,
+            b"PATH\0".as_ptr() as *const c_char,
+            b"/usr/bin:/bin\0".as_ptr() as *const c_char,
             1,
         );
         libc::setenv(
-            b"LANG\0".as_ptr() as *const i8,
-            b"C.UTF-8\0".as_ptr() as *const i8,
+            b"LANG\0".as_ptr() as *const c_char,
+            b"C.UTF-8\0".as_ptr() as *const c_char,
             1,
         );
     }
