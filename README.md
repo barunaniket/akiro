@@ -1,11 +1,11 @@
-﻿<div align="center">
+<div align="center">
 
 # ⚡ Akiro
 
 **High-Performance, Memory-Safe Distributed Code Execution Engine & Online Judge Sandbox**
 
 [![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange?logo=rust)](https://www.rust-lang.org/)
-[![Docker Image](https://img.shields.io/badge/Container-ghcr.io%2Fbarunaniket%2Fakiro-blue?logo=docker)](https://github.com/barunaniket/akiro/pkgs/container/akiro)
+[![Docker](https://img.shields.io/badge/Docker-Local_Build-blue?logo=docker)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Cgroups v2](https://img.shields.io/badge/Isolation-Cgroups_v2_%2B_Seccomp_BPF-red)](https://man7.org/linux/man-pages/man7/cgroups.7.html)
 [![Throughput](https://img.shields.io/badge/Throughput-76%2B_tests%2Fsec-success)](#-live-performance-benchmarks)
@@ -63,7 +63,7 @@ Akiro employs a multi-layered **Defense-in-Depth** kernel isolation model matchi
      v                                     v                                     v
 +------------------------+    +------------------------+    +------------------------+
 |    Linux Namespaces    |    |       Cgroups v2       |    |   Seccomp & RLIMITs    |
-| - CLONE_NEWNET (No net)|    | - memory.max = 256MB   |    | - RLIMIT_FSIZE (10MB)  |
+| - CLONE_NEWNET (No net)|    | - memory.max = 256MB   |    | - RLIMIT_FSIZE (16MB)  |
 | - CLONE_NEWPID (Hidden)|    | - pids.max (anti-fork) |    | - RLIMIT_CPU (Hard kill|
 | - CLONE_NEWNS  (Mount) |    | - cgroup.kill cleanup  |    | - MS_RDONLY Rootfs     |
 | - pivot_root isolation |    | - memory.swap.max = 0  |    | - Strict Syscall Filter|
@@ -86,32 +86,37 @@ Akiro employs a multi-layered **Defense-in-Depth** kernel isolation model matchi
 - Atomic cgroup cleanup via `cgroup.kill` guarantees zero zombie or orphan child processes remain after execution.
 
 ### 4. Output Limit Enforcement (`RLIMIT_FSIZE`)
-- Hard file size and output limit enforced via `RLIMIT_FSIZE` (default: 10 MB).
+- Hard file size and output limit enforced via `RLIMIT_FSIZE` (16 MB for runners, 256 MB for compilers).
 - Infinite output floods (`while(1) printf("A");`) trigger immediate `SIGXFSZ` and `RuntimeError` within 20ms.
 
 ---
 
 ## 🚀 Quick Start
 
-### Option 1: Run Pre-Built Container via GHCR (Recommended)
+### Option 1: Local Docker Build (Recommended)
 
-#### Start as Standalone Gateway + Worker:
+Akiro compiles directly and natively on your host machine for maximum CPU performance (works out of the box on x86_64, AMD64, ARM64, Apple Silicon M-series, and Linux servers).
+
 ```bash
-docker run -d --name akiro --privileged -p 8080:8080 --restart unless-stopped \
-  ghcr.io/barunaniket/akiro:latest
+# 1. Clone the repository
+git clone https://github.com/barunaniket/akiro.git
+cd akiro
+
+# 2. Build the Docker container locally
+docker build -t akiro .
+
+# 3. Start as Standalone Gateway + Worker:
+docker run -d --name akiro --privileged -p 8080:8080 --restart unless-stopped akiro
+
+# (Optional) Join as a Distributed Worker Node in a cluster:
+docker run -d --name akiro-worker --privileged --restart unless-stopped akiro \
+  --mode worker --redis "redis://:CLUSTER_TOKEN@LEADER_IP:6379" --workers auto
 ```
 
-#### Join as a Distributed Worker Node:
-```bash
-docker run -d --name akiro-worker --privileged --restart unless-stopped \
-  ghcr.io/barunaniket/akiro:latest --mode worker \
-  --redis "redis://:CLUSTER_TOKEN@LEADER_IP:6379" --workers auto
-```
-
-### Option 2: Build from Source
+### Option 2: Direct Host Compilation with Cargo
 
 ```bash
-# Prerequisites: Rust 1.75+, Linux with Cgroups v2 enabled, libseccomp-dev
+# Prerequisites: Rust 1.75+, Linux kernel with Cgroups v2 enabled
 git clone https://github.com/barunaniket/akiro.git
 cd akiro
 cargo build --release
@@ -122,16 +127,27 @@ sudo ./target/release/akiro --mode all --port 8080
 
 ## 🌐 Supported Language Stack
 
-All runtimes are pre-warmed and compiled with competitive programming optimizations:
+All 18 runtimes and compilers are pre-configured with competitive programming optimizations:
 
 | Language | Identifier | Compiler / Engine | Version | Optimizations Applied |
 | :--- | :---: | :--- | :--- | :--- |
-| **C++** | `cpp` | G++ | 12.2+ (C++20) | Precompiled `<bits/stdc++.h>` (PCH) + **AtCoder Library (ACL)** |
-| **C** | `c` | GCC | 12.2+ | `-O3 -march=x86-64` |
+| **C++** | `cpp` | G++ | 12.2+ (C++20) | Precompiled `<bits/stdc++.h>` (PCH) + **AtCoder Library (ACL)** (`-O3`) |
+| **C** | `c` | GCC | 12.2+ | `-O3 -march=native` optimization flags |
 | **Python** | `python` | CPython | 3.11+ | Precompiled standard library bytecode (`.pyc`) |
-| **Java** | `java` | OpenJDK | 17 LTS | Pre-dumped **Java CDS (Class Data Sharing)** archive |
-| **JavaScript** | `javascript` | Bun | 1.1+ | Fast V8-compatible runtime engine |
-| **TypeScript** | `typescript` | Bun TS | 1.1+ | Native zero-transpile JIT execution |
+| **PyPy** | `pypy` | PyPy3 | 7.3+ | Fast JIT compilation for high-iteration algorithmic jobs |
+| **Java** | `java` | OpenJDK | 17 LTS | Pre-dumped **Java CDS (Class Data Sharing)** archive (`-Xshare:on`) |
+| **JavaScript** | `javascript` / `js` | Bun | 1.1+ | High-performance V8 runtime engine |
+| **TypeScript** | `typescript` / `ts` | Bun TS | 1.1+ | Native zero-transpile JIT execution |
+| **Rust** | `rust` / `rs` | Rustc | 1.75+ | `-O` optimized machine code generation |
+| **Go** | `go` | Golang | 1.22+ | Pre-warmed persistent GOCACHE compiler caching |
+| **Kotlin** | `kotlin` / `kt` | Kotlinc | 2.1.10 | Direct JVM bytecode execution with single-tier JIT |
+| **C#** | `csharp` / `cs` | Mono MCS | 6.8+ | `-optimize+` optimized CIL runtime |
+| **Zig** | `zig` | Zig | 0.13.0 | `-O ReleaseFast` native compilation |
+| **Ruby** | `ruby` / `rb` | Ruby | 3.1+ | Optimized bytecode interpretation |
+| **PHP** | `php` | PHP CLI | 8.2+ | OpCache JIT execution |
+| **Haskell** | `haskell` / `hs` | GHC | 9.0.2 | `-O2` native optimization pipeline |
+| **Dart** | `dart` | Dart SDK | 3.0+ | `dart compile exe` AOT native binary generation |
+| **Scala** | `scala` | Scalac + Java | 2.11+ / OpenJDK | Direct JVM bytecode runner bypassing slow shell wrappers |
 | **SQL** | `sql` | SQLite3 | 3.40+ | In-memory relational query execution with CSV table output parsing |
 
 ---
@@ -227,7 +243,7 @@ curl -X POST https://<HOST>/api/v1/submit \
 ## 📊 Live Performance Benchmarks
 
 ### 1. 200-Submission Multi-Language Round-Robin Stress Test
-*Evaluated across all 7 languages on an 18-worker distributed cluster:*
+*Evaluated across all languages on a distributed cluster:*
 
 ```
 ================================================================
