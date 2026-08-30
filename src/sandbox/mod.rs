@@ -1,6 +1,7 @@
 pub mod config;
 pub mod result;
 pub mod seccomp;
+pub mod admission;
 
 #[cfg(target_os = "linux")]
 pub mod child;
@@ -60,7 +61,26 @@ pub struct Sandbox;
 
 #[cfg(target_os = "linux")]
 impl Sandbox {
-    pub async fn execute(config: SandboxConfig) -> Result<ExecutionResult, SandboxError> {
+    pub async fn execute(mut config: SandboxConfig) -> Result<ExecutionResult, SandboxError> {
+        // Memory-aware admission: acquire the memory-budget permits FIRST, before allocating any
+        // kernel resources (pipes / cgroup / fork), so a queued job waits holding nothing. Bound
+        // to a named local declared first ⇒ by Rust's reverse drop order it releases LAST, after
+        // the supervisor's cgroup teardown, so the budget is returned only once the memory is
+        // actually freed. NOTE: `let _ = acquire(...)` would drop the permit immediately and
+        // silently disable the gate — it must be a named binding held to function end.
+        let _permit = admission::budget()
+            .acquire_many_owned(admission::units_for(config.memory_limit_bytes))
+            .await
+            .expect("admission semaphore is 'static and is never closed");
+
+        // Assign a per-execution jail id in the PARENT (before fork) so we can deterministically
+        // remove the child's `/tmp/judge_root_<jail_id>` directory after it exits. The child's
+        // `FsIsolation` Drop never runs — `execve` replaces its image first — so without this the
+        // directory leaks one entry per test case onto the (overlay) `/tmp`.
+        if config.enable_fs_isolation && config.jail_id.is_empty() {
+            config.jail_id = uuid::Uuid::new_v4().to_string();
+        }
+
         let pipes = ChildProcessPipes::new()?;
 
         // Create cgroup v2 for memory and CPU limits.
@@ -132,6 +152,15 @@ impl Sandbox {
                 let stderr_future = read_pipe_output(pipes.stderr_read, config.max_output_bytes);
 
                 let supervise_res = supervisor.supervise().await;
+
+                // Deterministic parent-side cleanup of the child's jail root directory. The
+                // child has exited (supervise returned), so its private-namespace mounts are
+                // gone and only the empty host-visible directory remains — a race-free `rmdir`.
+                // `remove_dir` (not `remove_dir_all`) deliberately never crosses a mount point;
+                // any rare leftover is swept at boot by entrypoint.sh.
+                if config.enable_fs_isolation && !config.jail_id.is_empty() {
+                    let _ = std::fs::remove_dir(format!("/tmp/judge_root_{}", config.jail_id));
+                }
                 // Bounded: if a program never drains a large stdin, the blocking writer
                 // would otherwise wait forever. 5s is well beyond any real input feed.
                 let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), stdin_handle).await;

@@ -104,6 +104,24 @@ sudo ./target/release/akiro --mode all --port 8080 --languages cpp,python,java,r
 
 ---
 
+## ⚙️ Deployment Tuning (Environment Variables)
+
+Akiro ships with conservative defaults sized for a small **2‑core / 1 GB** VM. Every limit is override‑able at runtime — no rebuild required. Byte values accept `k` / `m` / `g` suffixes (1024‑based).
+
+| Variable | Default | Purpose |
+| :--- | :---: | :--- |
+| `JUDGE_MEM_BUDGET_BYTES` | `768m` | **Memory‑aware admission budget.** Concurrent sandboxes are gated so their combined memory limits never exceed this — the single knob that stops a burst from driving the host OOM killer into the judge. |
+| `JUDGE_MAX_MEMORY_BYTES` | `512m` | Hard clamp on any single job's requested memory, applied on **both** the HTTP and Redis ingress paths. |
+| `JUDGE_COMPILE_MEMORY_BYTES` | `512m` | Hard clamp on compile‑phase memory, so two concurrent compiles cannot exceed physical RAM. |
+| `JUDGE_MAX_QUEUE` | `128` | Max queued jobs before returning `503` backpressure. |
+| `JUDGE_WORKERS` | `auto` | Local worker count (`auto` = CPU cores). |
+| `ENABLED_LANGUAGES` | *(all)* | Comma‑separated language whitelist for this instance. |
+| `JUDGE_CORS_ALLOW_ORIGIN` | *(permissive)* | CORS allow‑list; set to your frontend origin(s) in production. |
+
+> On a 1 GB VM the `768m` budget yields ~3 × 256 MB execution slots — e.g. two 256 MB runs with headroom, or one 512 MB compile alongside one run. Scale `JUDGE_MEM_BUDGET_BYTES` (and `JUDGE_MAX_MEMORY_BYTES`) up proportionally on larger hosts. Keep `JUDGE_MAX_MEMORY_BYTES` **≤** `JUDGE_MEM_BUDGET_BYTES`, or admission will under‑account a single large job.
+
+---
+
 ## 🌐 Supported Language Stack
 
 All 18 runtimes and compilers are pre-configured with competitive programming optimizations:

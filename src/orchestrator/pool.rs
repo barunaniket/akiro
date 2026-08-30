@@ -79,6 +79,15 @@ impl JudgeWorkerPool {
             request.job_id = uuid::Uuid::new_v4().to_string();
         }
 
+        // Clamp the requested per-job memory to the deployment ceiling. Done HERE, not in
+        // `JobRequest::validate`, because BOTH ingress paths converge on `submit` — the redis
+        // consumer deserializes and submits without ever calling `validate()`. On a small host
+        // this stops a single oversized request from driving the host OOM killer into the judge.
+        let max_mem = crate::sandbox::admission::max_job_memory_bytes();
+        if request.memory_limit_bytes > max_mem {
+            request.memory_limit_bytes = max_mem;
+        }
+
         let (result_tx, result_rx) = oneshot::channel();
 
         let envelope = JobEnvelope {

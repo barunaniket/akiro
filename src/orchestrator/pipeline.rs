@@ -44,11 +44,19 @@ impl ExecutionPipeline {
             let bin_path = temp_dir.path().join("binary");
 
             if let Some(compile_config) = runner.get_compile_command(&src_path, &bin_path) {
+                // Clamp compile-phase memory to the deployment ceiling (default 512 MB). This
+                // covers every language regardless of its per-language compile default, so two
+                // concurrent compiles can't commit more than physical RAM on a 1 GB host. The
+                // global admission semaphore in Sandbox::execute gates compiles by this value.
+                let compile_mem = compile_config
+                    .memory_limit_bytes
+                    .min(crate::sandbox::admission::compile_memory_bytes());
                 let compile_config = compile_config
                     .with_profile(crate::sandbox::config::ExecutionProfile::Compile)
                     .with_fs_isolation(false)
                     .with_network_isolation(false)
                     .with_pids_limit(1024)
+                    .with_memory_limit(compile_mem)
                     .with_work_dir(temp_dir.path().to_path_buf());
 
                 let compile_result = Sandbox::execute(compile_config)

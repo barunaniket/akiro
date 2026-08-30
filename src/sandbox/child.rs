@@ -158,7 +158,14 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
         nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS)
             .map_err(|e| ChildError::NamespaceError(format!("mount-namespace unshare failed: {}", e)))?;
 
-        let job_id = Uuid::new_v4().to_string();
+        // Use the parent-provided jail id so the parent can deterministically clean up
+        // `/tmp/judge_root_<jail_id>` after we exit (our Drop never runs post-execve). Fall
+        // back to a fresh UUID only if the parent left it unset (e.g. a direct unit test).
+        let job_id = if config.jail_id.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            config.jail_id.clone()
+        };
         _fs_isolation = FsIsolation::setup(
             &job_id,
             config.workspace_dir.as_deref(),

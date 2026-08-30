@@ -62,6 +62,11 @@ enable_cgroup_delegation || echo "⚠  Continuing startup, but sandbox jobs will
 # Block cloud metadata service IP (Azure / AWS / GCP) from container egress
 iptables -A OUTPUT -d 169.254.169.254 -j DROP 2>/dev/null || true
 
+# Sweep any stale per-job jail root dirs left by a previous run that was killed mid-job.
+# On the happy path the judge parent rmdir's each one deterministically after the child
+# exits; this only mops up crash leftovers so /tmp doesn't accrete empty directories.
+rm -rf /tmp/judge_root_* 2>/dev/null || true
+
 # Start embedded Redis daemon if enabled (default: true)
 ENABLE_REDIS="${ENABLE_EMBEDDED_REDIS:-true}"
 if [ "$ENABLE_REDIS" = "true" ]; then
@@ -97,6 +102,7 @@ echo " Mode:    ${JUDGE_MODE:-all}"
 echo " Port:    ${JUDGE_PORT:-8080}"
 echo " Workers: ${JUDGE_WORKERS:-auto}"
 echo " Redis:   ${JUDGE_REDIS:-none}"
+echo " Memory:  budget ${JUDGE_MEM_BUDGET_BYTES:-768m} · job≤${JUDGE_MAX_MEMORY_BYTES:-512m} · compile≤${JUDGE_COMPILE_MEMORY_BYTES:-512m}"
 echo "----------------------------------------------"
 
 # If JUDGE_WORKERS is set to "auto", unset it so clap defaults to CPU core count

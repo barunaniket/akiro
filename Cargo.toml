@@ -38,7 +38,7 @@ tikv-jemallocator = "0.5"
 seccompiler = "0.4"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
 
 [[bench]]
 name = "sandbox_bench"

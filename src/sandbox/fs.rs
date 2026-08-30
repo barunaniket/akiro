@@ -41,6 +41,15 @@ impl FsIsolation {
             job_id: job_id.to_string(),
         };
 
+        // Detach our whole mount tree from propagation FIRST — before any mount we make —
+        // so nothing here (tmpfs root, ro binds, pivot_root, the .old_root umount) can
+        // propagate back to the host/container mount namespace or to a sibling sandbox
+        // child. Previously this was done last, inside `pivot_into_new_root`, i.e. AFTER
+        // ~10 mounts had already happened; that was only safe because the container runtime
+        // happened to make `/` non-shared. Doing it first makes isolation airtight
+        // regardless of the runtime's `/` propagation state.
+        isolation.make_root_private()?;
+
         isolation.create_ephemeral_root(workdir_size_bytes)?;
         isolation.setup_readonly_mounts(read_only_paths)?;
         isolation.setup_dev()?;
@@ -49,6 +58,27 @@ impl FsIsolation {
         isolation.pivot_into_new_root()?;
 
         Ok(isolation)
+    }
+
+    /// Make the child's entire mount tree recursively private, so no mount/umount we
+    /// perform (nor the later pivot_root) propagates to the host namespace or to sibling
+    /// sandbox children. Called as the very first action of `setup`.
+    fn make_root_private(&self) -> Result<(), FsError> {
+        unsafe {
+            if libc::mount(
+                std::ptr::null(),
+                b"/\0".as_ptr() as *const libc::c_char,
+                std::ptr::null(),
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            ) != 0
+            {
+                return Err(FsError::PivotRootFailed(
+                    "Failed to make / recursively private".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn create_ephemeral_root(&self, size_bytes: u64) -> Result<(), FsError> {
@@ -266,19 +296,8 @@ impl FsIsolation {
     }
 
     fn pivot_into_new_root(&self) -> Result<(), FsError> {
-        // Make current mount point private to prevent propagation using libc
-        unsafe {
-            if libc::mount(
-                std::ptr::null(),
-                b"/\0".as_ptr() as *const libc::c_char,
-                std::ptr::null(),
-                libc::MS_REC | libc::MS_PRIVATE,
-                std::ptr::null(),
-            ) != 0
-            {
-                return Err(FsError::PivotRootFailed(format!("Failed to make / private")));
-            }
-        }
+        // NOTE: `/` was already made recursively private at the very start of `setup`
+        // (see `make_root_private`), so no propagation-guard is needed here.
 
         // Create old_root directory in new root
         let old_root = self.root_path.join(".old_root");
