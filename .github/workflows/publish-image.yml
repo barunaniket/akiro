@@ -10,6 +10,15 @@ on:
   push:
     branches: [ main ]
     tags: [ 'v*' ]
+    # Skip the (expensive, multi-arch) image build when a push touches ONLY docs,
+    # markdown, licensing, or CI config — none of which change the image contents.
+    # Use the "Run workflow" button (workflow_dispatch) to rebuild manually if needed.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
   workflow_dispatch:
 
 env:

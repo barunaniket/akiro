@@ -32,42 +32,14 @@
 
 Akiro employs a multi-layered **Defense-in-Depth** kernel isolation model matching the security standards of IOI/ICPC contest environments:
 
-```
-                      +----------------------------------------+
-                      |         Untrusted Submission           |
-                      +----------------------------------------+
-                                           |
-                                           v
-                      +----------------------------------------+
-                      |         Axum REST / WS Gateway         |
-                      |  - Dual-Token Auth (JUDGE_SECRET)      |
-                      |  - DefaultBodyLimit: 2 MB              |
-                      |  - Bounded Tokio Channel: 128 (503)    |
-                      +----------------------------------------+
-                                           |
-                                           v
-                      +----------------------------------------+
-                      |     Distributed Redis Stream Queue     |
-                      |  - Topic: judge:jobs (Consumer Groups) |
-                      |  - Active 20s TTL Worker Heartbeats    |
-                      +----------------------------------------+
-                                           |
-                                           v
-                      +----------------------------------------+
-                      |       Worker Pool Execution Mesh       |
-                      |  - Adaptive Concurrency (CPU Cores)    |
-                      +----------------------------------------+
-                                           |
-     +-------------------------------------+-------------------------------------+
-     |                                     |                                     |
-     v                                     v                                     v
-+------------------------+    +------------------------+    +------------------------+
-|    Linux Namespaces    |    |       Cgroups v2       |    |   Seccomp & RLIMITs    |
-| - CLONE_NEWNET (No net)|    | - memory.max = 256MB   |    | - RLIMIT_FSIZE (16MB)  |
-| - CLONE_NEWPID (Hidden)|    | - pids.max (anti-fork) |    | - RLIMIT_CPU (Hard kill|
-| - CLONE_NEWNS  (Mount) |    | - cgroup.kill cleanup  |    | - MS_RDONLY Rootfs     |
-| - pivot_root isolation |    | - memory.swap.max = 0  |    | - Strict Syscall Filter|
-+------------------------+    +------------------------+    +------------------------+
+```mermaid
+flowchart TD
+    A["Untrusted Submission"] --> B["Axum REST / WS Gateway<br/>Dual-Token Auth (JUDGE_SECRET)<br/>DefaultBodyLimit 2 MB<br/>Bounded Tokio Channel 128 to 503"]
+    B --> C["Distributed Redis Stream Queue<br/>Topic judge:jobs (Consumer Groups)<br/>Active 20s TTL Worker Heartbeats"]
+    C --> D["Worker Pool Execution Mesh<br/>Adaptive Concurrency (CPU Cores)"]
+    D --> E["Linux Namespaces<br/>CLONE_NEWNET (no net)<br/>CLONE_NEWPID / CLONE_NEWNS<br/>pivot_root isolation"]
+    D --> F["Cgroups v2<br/>memory.max = 256MB<br/>pids.max (anti-fork)<br/>cgroup.kill cleanup<br/>memory.swap.max = 0"]
+    D --> G["Seccomp and RLIMITs<br/>RLIMIT_FSIZE 16MB<br/>RLIMIT_CPU hard kill<br/>MS_RDONLY rootfs<br/>strict syscall filter"]
 ```
 
 ### 1. Filesystem & Escape Isolation (`pivot_root` + `MS_RDONLY`)
@@ -163,13 +135,12 @@ All 18 runtimes and compilers are pre-configured with competitive programming op
 
 Akiro features a **Dual-Token Architecture** allowing effortless scaling from 1 machine to hundreds of distributed nodes:
 
-```
-[ Frontend / Next.js ] 
-        | (HTTPS + JUDGE_SECRET)
-        v
-[ Akiro Leader Node (Azure) ] <--- Port 6379 (CLUSTER_TOKEN) ---> [ Laptop Worker 1 (8 Cores) ]
-                               <--- Port 6379 (CLUSTER_TOKEN) ---> [ Laptop Worker 2 (16 Cores) ]
-                               <--- Port 6379 (CLUSTER_TOKEN) ---> [ Cloud VM Worker N ... ]
+```mermaid
+flowchart LR
+    FE["Frontend / Next.js"] -->|"HTTPS + JUDGE_SECRET"| L["Akiro Leader Node<br/>(Azure)"]
+    L <-->|"Redis 6379 (CLUSTER_TOKEN)"| W1["Laptop Worker 1<br/>8 Cores"]
+    L <-->|"Redis 6379 (CLUSTER_TOKEN)"| W2["Laptop Worker 2<br/>16 Cores"]
+    L <-->|"Redis 6379 (CLUSTER_TOKEN)"| WN["Cloud VM Worker N ..."]
 ```
 
 * **`JUDGE_SECRET`**: Protects the public HTTP API (`POST /api/v1/submit` and `GET /health`).
