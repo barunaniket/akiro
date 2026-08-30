@@ -53,6 +53,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<ApiState>) {
                             }
                         }
 
+                        // Validate submission shape & size limits (shared with the REST path)
+                        if let Err(msg) = request.validate() {
+                            let error_msg = serde_json::json!({ "error": msg }).to_string();
+                            let _ = sender.send(axum::extract::ws::Message::Text(error_msg)).await;
+                            break;
+                        }
+
                         // Create progress channel
                         let (progress_tx, mut progress_rx) = mpsc::unbounded_channel();
 

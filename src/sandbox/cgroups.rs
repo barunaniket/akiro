@@ -25,6 +25,9 @@ pub struct CgroupStats {
     pub memory_current_bytes: u64,
     pub memory_peak_bytes: u64,
     pub cpu_usage_usec: u64,
+    /// `oom_kill` counter from `memory.events` — non-zero means the memory controller
+    /// OOM-killed a process in this cgroup (i.e. the job exceeded `memory.max`).
+    pub oom_kill_count: u64,
 }
 
 pub struct CgroupManager {
@@ -107,10 +110,13 @@ impl CgroupManager {
 
         let cpu_usage_usec = read_cpu_stat(&cpu_stat_path).unwrap_or(0);
 
+        let oom_kill_count = read_oom_kill(&self.cgroup_path.join("memory.events"));
+
         Ok(CgroupStats {
             memory_current_bytes,
             memory_peak_bytes,
             cpu_usage_usec,
+            oom_kill_count,
         })
     }
 
@@ -217,6 +223,23 @@ fn read_cpu_stat(path: &std::path::Path) -> Result<u64, CgroupError> {
     }
 
     Ok(0)
+}
+
+/// Read the `oom_kill` counter from a cgroup v2 `memory.events` file. Returns 0 if the
+/// file/field is absent. A non-zero value means the memory controller killed a process in
+/// this cgroup for exceeding `memory.max`. Note: the sibling field `oom_group_kill` is not
+/// matched — the `"oom_kill "` prefix (with trailing space) is exact.
+fn read_oom_kill(path: &std::path::Path) -> u64 {
+    if let Ok(contents) = fs::read_to_string(path) {
+        for line in contents.lines() {
+            if let Some(rest) = line.strip_prefix("oom_kill ") {
+                if let Ok(v) = rest.trim().parse::<u64>() {
+                    return v;
+                }
+            }
+        }
+    }
+    0
 }
 
 #[cfg(test)]

@@ -67,14 +67,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
     }
 
+    // Single background reaper: the sole wait4 caller. It reaps every terminated child —
+    // routing supervised children's exit status to their ProcessSupervisor (accurate
+    // cpu/memory + MLE/TLE/RE) and discarding orphaned grandchildren (no zombies).
     #[cfg(target_os = "linux")]
     tokio::spawn(async {
         if let Ok(mut sigchld) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()) {
             while sigchld.recv().await.is_some() {
-                let mut status = 0;
-                unsafe {
-                    while libc::waitpid(-1, &mut status, libc::WNOHANG) > 0 {}
-                }
+                akiro::sandbox::reaper::reap_all();
             }
         }
     });

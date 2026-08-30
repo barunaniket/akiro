@@ -1,16 +1,14 @@
-use libc::{c_int, wait4, WIFEXITED, WIFSIGNALED, WEXITSTATUS, WTERMSIG, SIGKILL};
-use std::io::Read;
-use std::os::unix::io::FromRawFd;
+use libc::{c_int, WIFEXITED, WIFSIGNALED, WEXITSTATUS, WTERMSIG, SIGKILL};
 use std::time::Instant;
 use tokio::task;
 use tokio::time::{sleep, Duration};
 use nix::unistd::Pid;
-use nix::sys::signal::{kill, Signal};
 use thiserror::Error;
 
 use crate::sandbox::config::SandboxConfig;
 use crate::sandbox::result::{ExecutionResult, SandboxStatus};
 use crate::sandbox::cgroups::CgroupManager;
+use crate::sandbox::reaper::SupervisedChild;
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
@@ -27,73 +25,81 @@ pub struct ProcessSupervisor {
     config: SandboxConfig,
     start_time: Instant,
     cgroup: Option<CgroupManager>,
+    supervised: SupervisedChild,
 }
 
 impl ProcessSupervisor {
-    pub fn new(pid: Pid, config: SandboxConfig, cgroup: Option<CgroupManager>) -> Self {
+    pub fn new(
+        pid: Pid,
+        config: SandboxConfig,
+        cgroup: Option<CgroupManager>,
+        supervised: SupervisedChild,
+    ) -> Self {
         Self {
             pid,
             config,
             start_time: Instant::now(),
             cgroup,
+            supervised,
         }
     }
 
-    pub async fn supervise(&self) -> Result<ExecutionResult, SupervisorError> {
+    /// Supervise the child to natural exit or the wall-time deadline.
+    ///
+    /// Detection is by polling the reaper's stash (filled on SIGCHLD) every few ms, NOT a
+    /// pidfd readiness edge. Under load that edge can be missed — the child finishes, the
+    /// reaper stashes its exit immediately, but a pidfd `select` never wakes, so the job
+    /// hangs until the wall-deadline timer (the intermittent ~wall-length stall we saw:
+    /// 17/227 jobs pinned at exactly the deadline). Polling the stash cannot miss an edge
+    /// and is fully async (never blocks a worker thread). The 5 ms poll adds negligible
+    /// latency versus the 0 ms pidfd path but removes the stall entirely.
+    pub async fn supervise(mut self) -> Result<ExecutionResult, SupervisorError> {
         let wall_time_deadline = self.config.wall_time_limit_ms;
+        let mut kill_grace: Option<Instant> = None;
 
-        // Try event-driven supervision via pidfd_open (Linux 5.3+)
-        let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.pid.as_raw(), 0 as c_int) } as c_int;
-
-        if pidfd >= 0 {
-            // Event-driven: zero-latency child exit detection
-            let async_fd = match tokio::io::unix::AsyncFd::new(pidfd) {
-                Ok(fd) => fd,
-                Err(_) => {
-                    unsafe { libc::close(pidfd); }
-                    return self.supervise_polling(wall_time_deadline).await;
-                }
-            };
-
-            tokio::select! {
-                _ = async_fd.readable() => {
-                    // Child exited — instant wakeup (0ms latency)
-                    unsafe { libc::close(pidfd); }
+        let result = loop {
+            // Reaper delivered this child's exit (natural or post-kill)?
+            if let Some((status, rusage)) = self.supervised.try_take() {
+                if kill_grace.is_none() {
+                    // Natural exit — make sure no stragglers remain in the process tree.
                     self.kill_process_tree();
-                    return self.wait_for_child();
                 }
-                _ = sleep(Duration::from_millis(wall_time_deadline)) => {
-                    // Time limit exceeded
-                    unsafe { libc::close(pidfd); }
-                    self.kill_process_tree();
-                    return self.wait_for_child();
+                break self.build_result(status, rusage);
+            }
+
+            let now = Instant::now();
+
+            // Wall-time deadline: kill the tree, then allow a short grace for the reaper to
+            // deliver the (now guaranteed) exit status.
+            if kill_grace.is_none()
+                && self.start_time.elapsed().as_millis() as u64 >= wall_time_deadline
+            {
+                self.kill_process_tree();
+                kill_grace = Some(now + Duration::from_secs(1));
+            }
+            if let Some(deadline) = kill_grace {
+                if now >= deadline {
+                    // Reaper never delivered (should not happen once killed) — synthesize.
+                    let rusage: libc::rusage = unsafe { std::mem::zeroed() };
+                    break self.build_result(SIGKILL, rusage);
                 }
             }
-        } else {
-            // Fallback for older kernels: polling with reduced interval
-            self.supervise_polling(wall_time_deadline).await
-        }
+
+            sleep(Duration::from_millis(5)).await;
+        };
+
+        // Offload cgroup teardown (kill_all + remove_dir, which can block on EBUSY) off the
+        // reactor so it never stalls the async runtime under load.
+        self.cleanup_cgroup_offloaded();
+        Ok(result)
     }
 
-    async fn supervise_polling(&self, wall_time_deadline: u64) -> Result<ExecutionResult, SupervisorError> {
-        loop {
-            let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
-
-            if elapsed_ms >= wall_time_deadline {
-                self.kill_process_tree();
-                break;
-            }
-
-            sleep(Duration::from_millis(5)).await; // 5ms poll (reduced from 20ms)
-
-            if let Some(result) = self.try_wait()? {
-                self.kill_process_tree();
-                return Ok(result);
-            }
+    /// Move the cgroup into a blocking task so its Drop (which may retry `remove_dir` on
+    /// EBUSY) runs off the async reactor. Fire-and-forget; the job result is already built.
+    fn cleanup_cgroup_offloaded(&mut self) {
+        if let Some(cg) = self.cgroup.take() {
+            tokio::task::spawn_blocking(move || drop(cg));
         }
-
-        self.kill_process_tree();
-        self.wait_for_child()
     }
 
     fn kill_process_tree(&self) {
@@ -107,51 +113,6 @@ impl ProcessSupervisor {
         }
     }
 
-    fn try_wait(&self) -> Result<Option<ExecutionResult>, SupervisorError> {
-        let mut status: c_int = 0;
-        let mut rusage: libc::rusage = unsafe { std::mem::zeroed() };
-
-        unsafe {
-            let ret = wait4(self.pid.as_raw(), &mut status, libc::WNOHANG, &mut rusage);
-            if ret == -1 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::ECHILD) {
-                    return Ok(Some(self.build_result(0, rusage)));
-                }
-                return Err(SupervisorError::Wait4Error(format!("wait4 failed: {}", err)));
-            }
-            if ret == 0 {
-                return Ok(None);
-            }
-        }
-
-        Ok(Some(self.build_result(status, rusage)))
-    }
-
-    fn wait_for_child(&self) -> Result<ExecutionResult, SupervisorError> {
-        let mut status: c_int = 0;
-        let mut rusage: libc::rusage = unsafe { std::mem::zeroed() };
-
-        for _ in 0..50 {
-            unsafe {
-                let ret = wait4(self.pid.as_raw(), &mut status, libc::WNOHANG, &mut rusage);
-                if ret > 0 {
-                    return Ok(self.build_result(status, rusage));
-                }
-                if ret == -1 {
-                    let err = std::io::Error::last_os_error();
-                    if err.raw_os_error() == Some(libc::ECHILD) {
-                        return Ok(self.build_result(0, rusage));
-                    }
-                    return Err(SupervisorError::Wait4Error(format!("wait4 failed: {}", err)));
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        Ok(self.build_result(libc::SIGKILL, rusage))
-    }
-
     fn build_result(&self, status: c_int, rusage: libc::rusage) -> ExecutionResult {
         let wall_time_ms = self.start_time.elapsed().as_millis() as u64;
 
@@ -161,22 +122,32 @@ impl ProcessSupervisor {
             ((user_us + sys_us) / 1000) as u64
         };
 
-        // Try to get memory from cgroup first (more accurate for physical memory)
-        // Fall back to getrusage if cgroup is not available
-        let memory_kb = if let Some(ref cgroup) = self.cgroup {
-            if let Ok(stats) = cgroup.read_stats() {
-                stats.memory_peak_bytes / 1024
-            } else {
-                rusage.ru_maxrss as u64
-            }
-        } else {
-            rusage.ru_maxrss as u64
-        };
+        // Read cgroup stats once: the memory OOM-kill flag, and the peak memory.
+        //
+        // Report the MAX of the cgroup peak and getrusage's peak RSS. They measure
+        // different things: cgroup `memory.peak` only counts memory *charged to this job's
+        // cgroup* (mostly anonymous pages) — an interpreter's shared, file-backed code/libs
+        // come from the read-only bind-mounts already in the host page cache, so they are
+        // charged elsewhere and the cgroup under-reports (e.g. 256 KB for an 8 MB Python
+        // process). `ru_maxrss` is the process's full peak RSS. The max gives the true
+        // footprint in every case (anonymous bomb, interpreter, multi-process compile).
+        let stats = self.cgroup.as_ref().and_then(|cg| cg.read_stats().ok());
+        let memory_kb = stats
+            .as_ref()
+            .map(|s| (s.memory_peak_bytes / 1024).max(rusage.ru_maxrss as u64))
+            .unwrap_or(rusage.ru_maxrss as u64);
+        let oom_killed = stats.as_ref().map(|s| s.oom_kill_count > 0).unwrap_or(false);
 
         let exit_code = WEXITSTATUS(status) as i32;
         let memory_limit_kb = self.config.memory_limit_bytes / 1024;
 
-        let sandbox_status = if WIFEXITED(status) {
+        // A cgroup memory OOM-kill is the ground-truth signal for MemoryLimitExceeded and
+        // takes precedence. (The kernel pins memory.current at exactly memory.max, so the
+        // old `memory_kb > limit` strict check never fired for a real OOM kill — it was
+        // mislabeled TimeLimitExceeded.)
+        let sandbox_status = if oom_killed {
+            SandboxStatus::MemoryLimitExceeded
+        } else if WIFEXITED(status) {
             if exit_code == 0 {
                 if memory_limit_kb > 0 && memory_kb > memory_limit_kb {
                     SandboxStatus::MemoryLimitExceeded

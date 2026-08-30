@@ -10,6 +10,8 @@ pub mod supervisor;
 pub mod cgroups;
 #[cfg(target_os = "linux")]
 pub mod fs;
+#[cfg(target_os = "linux")]
+pub mod reaper;
 
 #[cfg(target_os = "linux")]
 use {
@@ -61,9 +63,25 @@ impl Sandbox {
     pub async fn execute(config: SandboxConfig) -> Result<ExecutionResult, SandboxError> {
         let pipes = ChildProcessPipes::new()?;
 
-        // Create cgroup v2 for memory and CPU limits
-        // Errors are non-fatal - continue without cgroups if not available
-        let cgroup = CgroupManager::new(&config).ok();
+        // Create cgroup v2 for memory and CPU limits.
+        // FAIL-CLOSED: running untrusted code with no physical RAM / PID ceiling is a DoS
+        // and host-stability risk, so a cgroup setup failure aborts the job. This requires
+        // the container to have cgroup-v2 controller delegation working (see entrypoint.sh).
+        // Offloaded to a blocking task: the mkdir + memory.max/pids.max writes are sync fs
+        // I/O and must not run on the async reactor under load.
+        let cgroup = {
+            let cfg = config.clone();
+            match task::spawn_blocking(move || CgroupManager::new(&cfg)).await {
+                Ok(Ok(cg)) => Some(cg),
+                Ok(Err(e)) => return Err(SandboxError::CgroupError(e)),
+                Err(_) => {
+                    return Err(SandboxError::IoError(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "cgroup setup task panicked",
+                    )))
+                }
+            }
+        };
 
         let mut fork_res = unsafe { fork() };
         let mut retries = 0;
@@ -78,14 +96,26 @@ impl Sandbox {
 
         match fork_res? {
             ForkResult::Parent { child } => {
+                // Claim this child so the global reaper routes its exit status to the
+                // supervisor (accurate exit code / cpu / memory → correct MLE/TLE/RE)
+                // instead of discarding it. The handle is moved into the supervisor and
+                // unregisters when supervision ends.
+                let supervised = reaper::register_child(child.as_raw());
+
                 pipes.close_parent_ends();
 
-                // Attach child to cgroup immediately after fork
+                // Attach child to cgroup immediately after fork.
+                // FAIL-CLOSED: an unattached child runs outside all limits, so on failure we
+                // kill it and surface the error rather than run it unconfined. The global
+                // reaper collects the killed child (do not wait4 here — that races the reaper).
                 if let Some(ref cg) = cgroup {
-                    let _ = cg.attach_proc(child.as_raw());
+                    if let Err(e) = cg.attach_proc(child.as_raw()) {
+                        unsafe { libc::kill(child.as_raw(), libc::SIGKILL); }
+                        return Err(SandboxError::CgroupError(e));
+                    }
                 }
 
-                let supervisor = ProcessSupervisor::new(child, config.clone(), cgroup);
+                let supervisor = ProcessSupervisor::new(child, config.clone(), cgroup, supervised);
 
                 let stdin_handle = task::spawn_blocking({
                     let stdin_data = config.stdin_data.clone();
@@ -102,7 +132,9 @@ impl Sandbox {
                 let stderr_future = read_pipe_output(pipes.stderr_read, config.max_output_bytes);
 
                 let supervise_res = supervisor.supervise().await;
-                let _ = stdin_handle.await;
+                // Bounded: if a program never drains a large stdin, the blocking writer
+                // would otherwise wait forever. 5s is well beyond any real input feed.
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), stdin_handle).await;
 
                 let drain_timeout = tokio::time::Duration::from_millis(250);
                 let stdout_res = tokio::time::timeout(drain_timeout, stdout_future).await;

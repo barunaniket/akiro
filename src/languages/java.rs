@@ -28,7 +28,7 @@ impl LanguageRunner for Java {
             SandboxConfig::new(std::path::PathBuf::from("/usr/bin/javac"))
                 .with_args(vec![src_str])
                 .with_time_limit(15000) // 15 seconds for compilation
-                .with_memory_limit(1024 * 1024 * 1024), // 1 GB (javac needs more)
+                .with_memory_limit(384 * 1024 * 1024), // 384 MB — fits a 1 GB VM without OOM
         )
     }
 

@@ -86,6 +86,12 @@ impl ExecutionPipeline {
         mut result: JobResult,
         progress: Option<mpsc::UnboundedSender<ProgressEvent>>,
     ) -> Result<JobResult, String> {
+        // The Run profile drops the child to UID 65534. The workspace is a root-owned,
+        // 0700 TempDir bind-mounted to /sandbox, so hand ownership of it (and every
+        // compiled artifact within) to the sandbox user, or every job dies on EACCES.
+        #[cfg(unix)]
+        chown_tree(work_dir, SANDBOX_UID, SANDBOX_GID);
+
         // Path inside the sandbox jail after pivot_root
         let sandbox_bin_path = if runner.is_compiled() {
             Path::new("/sandbox").join("binary")
@@ -212,6 +218,33 @@ impl ExecutionPipeline {
         }));
 
         Ok(result)
+    }
+}
+
+/// UID/GID the untrusted Run-profile child drops to (must match `child.rs`).
+#[cfg(unix)]
+const SANDBOX_UID: u32 = 65534;
+#[cfg(unix)]
+const SANDBOX_GID: u32 = 65534;
+
+/// Recursively chown a directory tree to (uid, gid). Best-effort: individual failures
+/// are ignored — the sandbox still fails closed on EACCES if this genuinely could not run.
+/// The tree is a shallow, ephemeral per-job workspace on tmpfs.
+#[cfg(unix)]
+fn chown_tree(path: &Path, uid: u32, gid: u32) {
+    use std::os::unix::ffi::OsStrExt;
+    if let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
+        unsafe { libc::chown(c.as_ptr(), uid, gid) };
+    }
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                chown_tree(&p, uid, gid);
+            } else if let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) {
+                unsafe { libc::chown(c.as_ptr(), uid, gid) };
+            }
+        }
     }
 }
 

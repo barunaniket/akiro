@@ -14,6 +14,12 @@ pub enum SeccompError {
 }
 
 pub struct SeccompProfile {
+    // Informational allow-set documenting the syscalls a typical runner needs.
+    // The enforced filter is default-ALLOW with an explicit deny-list (see
+    // `blocked_syscall_numbers`), chosen over strict default-deny so that diverse
+    // language runtimes (JVM, bun, PyPy) are not killed for a benign syscall we
+    // failed to anticipate. Retained for reference and a possible future strict mode.
+    #[allow(dead_code)]
     allowed_syscalls: HashMap<&'static str, i32>,
 }
 
@@ -95,68 +101,140 @@ impl SeccompProfile {
         #[cfg(target_os = "linux")]
         {
             // Set NO_NEW_PRIVS to prevent privilege escalation via setuid/setcap
+            // and to permit loading a seccomp filter without CAP_SYS_ADMIN.
             unsafe {
                 if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                     return Err(SeccompError::InitError("Failed to set PR_SET_NO_NEW_PRIVS".to_string()));
                 }
             }
-        }
 
-        // In a real implementation, we would use seccompiler to build and load BPF.
-        // For now, we document the approach:
-        //
-        // 1. Build BPF rules using seccompiler::SeccompBuilder
-        // 2. Add default action: SCMP_ACT_KILL_PROCESS
-        // 3. Whitelist allowed syscalls with SCMP_ACT_ALLOW
-        // 4. Load via prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, filter)
-        //
-        // This requires root or CAP_SYS_ADMIN to load BPF filters in the child.
+            // Compile and load a real BPF filter into the kernel.
+            install_bpf_filter()?;
+        }
 
         Ok(())
     }
 }
 
+/// Syscalls unconditionally denied (EPERM) for untrusted Run-profile code.
+///
+/// These are escape / tamper vectors that no legitimate compute submission needs.
+/// Deliberately NOT blocked, because language runtimes depend on them:
+///   - `clone`/`clone3`/`fork`/`vfork` — JVM & runtime threads, subprocess harnesses
+///   - `execve`/`execveat`             — the sandbox's own launch of the program
+///   - `kill`/`tgkill`                 — runtime signal handling
+///   - the `socket` family             — network egress is already severed at the
+///     namespace layer (CLONE_NEWNET); blocking `socket` here breaks glibc NSS /
+///     `getaddrinfo` probes in some runtimes for no added isolation.
+///
+/// This list is the single source of truth: `blocked_syscall_numbers()` maps it to
+/// arch-correct numbers via `libc::SYS_*`, and the unit tests assert its invariants.
 pub fn blocked_syscalls() -> Vec<&'static str> {
     vec![
-        "socket",
-        "connect",
-        "bind",
-        "listen",
-        "accept",
-        "sendto",
-        "recvfrom",
-        "sendmsg",
-        "recvmsg",
-        "clone",
-        "clone3",
-        "fork",
-        "vfork",
-        "execve",
-        "execveat",
+        // Process introspection / debugging
         "ptrace",
-        "kill",
-        "tkill",
-        "tgkill",
-        "setuid",
-        "setgid",
-        "setreuid",
-        "setregid",
-        "seteuid",
-        "setegid",
-        "setgroups",
-        "setfsuid",
-        "setfsgid",
-        "chroot",
-        "chdir",
+        "process_vm_readv",
+        "process_vm_writev",
+        // Filesystem / mount-namespace escape
         "mount",
         "umount2",
         "pivot_root",
-        "reboot",
-        "syslog",
-        "sysctl",
+        "chroot",
+        "swapon",
+        "swapoff",
+        // Namespace manipulation (post-setup)
+        "setns",
+        "unshare",
+        // Kernel module (in)security
         "init_module",
+        "finit_module",
         "delete_module",
+        "kexec_load",
+        "reboot",
+        // Privileged kernel interfaces
+        "bpf",
+        "perf_event_open",
+        // Kernel keyring
+        "add_key",
+        "keyctl",
+        "request_key",
+        // Host clock / accounting tamper
+        "settimeofday",
+        "clock_settime",
+        "adjtimex",
+        "clock_adjtime",
+        "acct",
+        "quotactl",
     ]
+}
+
+/// Kernel syscall numbers for `blocked_syscalls()`, resolved per-arch by libc.
+#[cfg(target_os = "linux")]
+fn blocked_syscall_numbers() -> Vec<libc::c_long> {
+    vec![
+        libc::SYS_ptrace,
+        libc::SYS_process_vm_readv,
+        libc::SYS_process_vm_writev,
+        libc::SYS_mount,
+        libc::SYS_umount2,
+        libc::SYS_pivot_root,
+        libc::SYS_chroot,
+        libc::SYS_swapon,
+        libc::SYS_swapoff,
+        libc::SYS_setns,
+        libc::SYS_unshare,
+        libc::SYS_init_module,
+        libc::SYS_finit_module,
+        libc::SYS_delete_module,
+        libc::SYS_kexec_load,
+        libc::SYS_reboot,
+        libc::SYS_bpf,
+        libc::SYS_perf_event_open,
+        libc::SYS_add_key,
+        libc::SYS_keyctl,
+        libc::SYS_request_key,
+        libc::SYS_settimeofday,
+        libc::SYS_clock_settime,
+        libc::SYS_adjtimex,
+        libc::SYS_clock_adjtime,
+        libc::SYS_acct,
+        libc::SYS_quotactl,
+    ]
+}
+
+/// Build a default-ALLOW seccomp filter that returns EPERM for each denied syscall,
+/// then load it onto the current (post-fork, single) thread via
+/// `prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ...)`.
+#[cfg(target_os = "linux")]
+fn install_bpf_filter() -> Result<(), SeccompError> {
+    use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter, TargetArch};
+    use std::collections::BTreeMap;
+
+    // Empty rule vec == unconditional match on that syscall number -> match action.
+    let mut rules: BTreeMap<libc::c_long, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
+    for nr in blocked_syscall_numbers() {
+        rules.insert(nr, vec![]);
+    }
+
+    let target_arch: TargetArch = std::env::consts::ARCH
+        .try_into()
+        .map_err(|_| SeccompError::UnsupportedPlatform)?;
+
+    let filter = SeccompFilter::new(
+        rules,
+        SeccompAction::Allow,                     // default for everything not listed
+        SeccompAction::Errno(libc::EPERM as u32), // listed syscalls -> EPERM
+        target_arch,
+    )
+    .map_err(|e| SeccompError::RuleError(format!("{e:?}")))?;
+
+    let program: BpfProgram = filter
+        .try_into()
+        .map_err(|e| SeccompError::LoadError(format!("{e:?}")))?;
+
+    apply_filter(&program).map_err(|e| SeccompError::LoadError(format!("{e:?}")))?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -174,26 +252,39 @@ mod tests {
     }
 
     #[test]
-    fn test_blocked_syscalls_no_networking() {
+    fn test_blocked_syscalls_deny_escape_and_tamper() {
         let blocked = blocked_syscalls();
-        assert!(blocked.contains(&"socket"));
-        assert!(blocked.contains(&"connect"));
-        assert!(blocked.contains(&"bind"));
-    }
-
-    #[test]
-    fn test_blocked_syscalls_no_privilege_escalation() {
-        let blocked = blocked_syscalls();
-        assert!(blocked.contains(&"setuid"));
-        assert!(blocked.contains(&"setgid"));
+        // Filesystem / namespace escape vectors
+        assert!(blocked.contains(&"mount"));
+        assert!(blocked.contains(&"pivot_root"));
+        assert!(blocked.contains(&"chroot"));
+        assert!(blocked.contains(&"setns"));
+        assert!(blocked.contains(&"unshare"));
+        // Debugging / introspection
         assert!(blocked.contains(&"ptrace"));
+        // Kernel tamper
+        assert!(blocked.contains(&"init_module"));
+        assert!(blocked.contains(&"reboot"));
+        assert!(blocked.contains(&"bpf"));
     }
 
     #[test]
-    fn test_blocked_syscalls_no_fork_exec() {
+    fn test_blocked_syscalls_allow_runtime_essentials() {
+        // These MUST stay allowed or language runtimes (and the launch execve
+        // itself) would be killed. This is a correctness guarantee, not a nicety.
         let blocked = blocked_syscalls();
-        assert!(blocked.contains(&"fork"));
-        assert!(blocked.contains(&"clone"));
-        assert!(blocked.contains(&"execve"));
+        for essential in ["clone", "clone3", "fork", "vfork", "execve", "kill", "tgkill"] {
+            assert!(
+                !blocked.contains(&essential),
+                "{essential} must not be in the seccomp deny-list"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_blocked_names_and_numbers_agree() {
+        // Name list and number list must stay the same length (kept in sync by hand).
+        assert_eq!(blocked_syscalls().len(), blocked_syscall_numbers().len());
     }
 }

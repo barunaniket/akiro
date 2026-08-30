@@ -13,6 +13,43 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+/// Build the CORS policy from `JUDGE_CORS_ALLOW_ORIGIN`:
+///   - unset          -> permissive (any origin) + a loud startup warning
+///   - `*`            -> permissive (explicit opt-in), no warning
+///   - comma list     -> strict allow-list of exactly those origins
+///
+/// The default stays permissive so an existing browser frontend is not silently
+/// broken on upgrade; production deployments should set an explicit origin list.
+fn build_cors_layer() -> CorsLayer {
+    use axum::http::{header, HeaderName, HeaderValue, Method};
+
+    match std::env::var("JUDGE_CORS_ALLOW_ORIGIN") {
+        Ok(v) if v.trim() == "*" => CorsLayer::permissive(),
+        Ok(v) if !v.trim().is_empty() => {
+            let origins: Vec<HeaderValue> = v
+                .split(',')
+                .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
+                .collect();
+            tracing::info!("CORS restricted to {} configured origin(s)", origins.len());
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([
+                    header::CONTENT_TYPE,
+                    header::AUTHORIZATION,
+                    HeaderName::from_static("x-judge-secret"),
+                ])
+        }
+        _ => {
+            tracing::warn!(
+                "CORS is permissive (any origin can call this judge). Set JUDGE_CORS_ALLOW_ORIGIN \
+                 to a comma-separated allow-list to restrict browser access."
+            );
+            CorsLayer::permissive()
+        }
+    }
+}
+
 use crate::orchestrator::JudgeWorkerPool;
 
 pub struct ApiState {
@@ -79,7 +116,7 @@ pub fn create_router(
         .merge(protected_routes)
         .merge(public_routes)
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
-        .layer(CorsLayer::permissive())
+        .layer(build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

@@ -238,11 +238,11 @@ pub async fn submit(
         }
     }
 
-    // Validate test cases exist
-    if request.test_cases.is_empty() {
+    // Validate submission shape & size limits (testcase count, payload sizes, limits)
+    if let Err(msg) = request.validate() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({"error": "At least one test case is required"})),
+            Json(json!({ "error": msg })),
         );
     }
 

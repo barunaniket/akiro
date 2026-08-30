@@ -28,7 +28,7 @@ impl LanguageRunner for Kotlin {
         Some(
             SandboxConfig::new(std::path::PathBuf::from("/usr/bin/java"))
                 .with_args(vec![
-                    "-Xmx768m".to_string(),
+                    "-Xmx384m".to_string(),
                     "-XX:+UseSerialGC".to_string(),
                     "-XX:TieredStopAtLevel=1".to_string(),
                     "-cp".to_string(),
@@ -40,7 +40,7 @@ impl LanguageRunner for Kotlin {
                     "-nowarn".to_string(),
                 ])
                 .with_time_limit(15000)
-                .with_memory_limit(1536 * 1024 * 1024),
+                .with_memory_limit(512 * 1024 * 1024),
         )
     }
 

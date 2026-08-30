@@ -23,6 +23,12 @@ pub enum ChildError {
     ExecveError(String),
     #[error("Namespace creation failed: {0}")]
     NamespaceError(String),
+    #[error("Filesystem isolation failed: {0}")]
+    IsolationError(String),
+    #[error("Seccomp installation failed: {0}")]
+    SeccompError(String),
+    #[error("Privilege drop failed: {0}")]
+    PrivDropError(String),
 }
 
 pub struct ChildProcessPipes {
@@ -134,23 +140,32 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
     apply_resource_limits(config)?;
     apply_environment_sanitization();
 
-    // Network & IPC isolation: disconnect child from host network stack and shared memory
+    // Network & IPC isolation: disconnect child from host network stack and shared memory.
+    // FAIL-CLOSED: if the kernel cannot grant these namespaces we must NOT run untrusted
+    // code with live host networking — abort the child instead.
     if config.enable_network_isolation {
-        let _ = nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNET | nix::sched::CloneFlags::CLONE_NEWIPC);
+        nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNET | nix::sched::CloneFlags::CLONE_NEWIPC)
+            .map_err(|e| ChildError::NamespaceError(format!("network/IPC unshare failed: {}", e)))?;
     }
 
-    // Setup filesystem isolation (pivot_root into ephemeral tmpfs with bind-mounted workspace)
+    // Setup filesystem isolation (pivot_root into ephemeral tmpfs with bind-mounted workspace).
+    // FAIL-CLOSED at every step: a failure here previously let code run on the bare host
+    // filesystem. The `_fs_isolation` binding must outlive this block (its Drop tears the
+    // mounts down) — it is released only when execve replaces the process image.
+    let _fs_isolation;
     if config.enable_fs_isolation {
         // Unshare mount namespace so mounts and pivot_root only affect the child process
-        let _ = nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS);
+        nix::sched::unshare(nix::sched::CloneFlags::CLONE_NEWNS)
+            .map_err(|e| ChildError::NamespaceError(format!("mount-namespace unshare failed: {}", e)))?;
 
         let job_id = Uuid::new_v4().to_string();
-        let _fs_isolation = FsIsolation::setup(
+        _fs_isolation = FsIsolation::setup(
             &job_id,
             config.workspace_dir.as_deref(),
             config.fs_workdir_size_bytes,
             &config.fs_readonly_paths,
-        ).ok(); // Non-fatal - continue without fs isolation if it fails
+        )
+        .map_err(|e| ChildError::IsolationError(e.to_string()))?;
     }
 
     if let Some(ref work_dir) = config.work_dir {
@@ -204,17 +219,41 @@ pub fn setup_child_process(config: &SandboxConfig, pipes: &ChildProcessPipes) ->
         env_gocache.as_ptr(), env_gopath.as_ptr(), std::ptr::null(),
     ];
 
-    // Install seccomp filter and drop privileges only for Run profile (untrusted code)
+    // Install seccomp filter and drop privileges only for Run profile (untrusted code).
     if config.profile == crate::sandbox::config::ExecutionProfile::Run {
+        // FAIL-CLOSED: refuse to exec untrusted code if the syscall filter cannot be loaded.
         let seccomp_profile = SeccompProfile::standard_runner();
-        if let Err(e) = seccomp_profile.install() {
-            eprintln!("Warning: Failed to install seccomp filter: {}", e);
-        }
-        
+        seccomp_profile
+            .install()
+            .map_err(|e| ChildError::SeccompError(e.to_string()))?;
+
+        // Drop from root to an unprivileged, non-mapped id (nobody = 65534). The server
+        // process must stay root to set up cgroups/mounts, so the drop happens here in the
+        // child, after all privileged setup and immediately before execve.
+        //
+        // Order is load-bearing and irreversible: clear supplementary groups, then GID,
+        // then UID last (once the UID is non-root you can no longer change GID/groups).
+        const SANDBOX_UID: libc::uid_t = 65534;
+        const SANDBOX_GID: libc::gid_t = 65534;
         unsafe {
-            let uid = libc::getuid();
-            libc::setresgid(uid, uid, uid);
-            libc::setresuid(uid, uid, uid);
+            if libc::setgroups(0, std::ptr::null()) != 0 {
+                return Err(ChildError::PrivDropError("setgroups(0) failed".to_string()));
+            }
+            if libc::setresgid(SANDBOX_GID, SANDBOX_GID, SANDBOX_GID) != 0 {
+                return Err(ChildError::PrivDropError("setresgid failed".to_string()));
+            }
+            if libc::setresuid(SANDBOX_UID, SANDBOX_UID, SANDBOX_UID) != 0 {
+                return Err(ChildError::PrivDropError("setresuid failed".to_string()));
+            }
+            // Defense in depth: verify the drop actually took effect and cannot be undone.
+            if libc::getuid() == 0
+                || libc::geteuid() == 0
+                || libc::setuid(0) == 0
+            {
+                return Err(ChildError::PrivDropError(
+                    "privilege drop did not take effect (still privileged)".to_string(),
+                ));
+            }
         }
     }
 
