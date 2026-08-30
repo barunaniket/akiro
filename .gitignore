@@ -9,6 +9,10 @@ Cargo.lock
 .idea/
 .vscode/
 *.iml
+
+# Local benchmark/test harnesses & scratch work (not part of the build)
+scratch/
+
 docs/DUAL_TOKEN_ARCHITECTURE.md
 docs/LIVE_AZURE_INSPECTION_REPORT.md
 docs/AKIRO_DEEP_INSPECTION.md
