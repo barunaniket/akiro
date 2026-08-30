@@ -12,45 +12,56 @@ set -e
 # into a child "init" leaf first, then delegate controllers from the (now empty) root.
 CGROUP_ROOT="/sys/fs/cgroup"
 
+# Delegate controllers into a cgroup's subtree_control, most-capable first. memory is the
+# only REQUIRED controller (the sandbox writes memory.max / pids.max); cpu is best-effort.
+# Order matters on WSL2: the atomic "+memory +cpu +pids" fails wholesale because WSL2 rejects
+# +cpu, AND delegating "+memory" ALONE also fails there — but "+memory +pids" TOGETHER works.
+# So cascade: all three -> memory+pids -> per-controller.
+delegate_controllers() {
+    _sc="$1/cgroup.subtree_control"
+    echo "+memory +cpu +pids" > "$_sc" 2>/dev/null && return 0
+    echo "+memory +pids"      > "$_sc" 2>/dev/null && return 0
+    for _ctrl in memory pids cpu; do
+        echo "+$_ctrl" > "$_sc" 2>/dev/null || true
+    done
+}
+
 enable_cgroup_delegation() {
     if [ ! -f "$CGROUP_ROOT/cgroup.controllers" ]; then
         echo "⚠  cgroup v2 unified hierarchy not found at $CGROUP_ROOT — per-job limits cannot be enforced."
         return 1
     fi
 
-    # Vacate the root cgroup so controllers can be enabled (no-internal-process rule).
-    if [ -s "$CGROUP_ROOT/cgroup.procs" ]; then
-        mkdir -p "$CGROUP_ROOT/init"
-        while read -r _pid; do
+    # Vacate the root cgroup so controllers can be enabled (no-internal-process rule). Move
+    # every pid into /init and RETRY until root is empty. TWO cgroupfs gotchas handled here:
+    #   1. Do NOT gate on `[ -s cgroup.procs ]` — cgroupfs reports st_size 0 even when the file
+    #      is populated, so `-s` is ALWAYS false and would skip the vacate entirely (this was a
+    #      latent bug: on WSL2 the root was never emptied, so memory delegation always failed).
+    #      Check the CONTENT (`[ -n "$(cat ...)" ]`) instead.
+    #   2. Re-snapshot each pass: writing pids into /init mutates cgroup.procs, so a single
+    #      streaming read leaves stragglers. Loop until empty (or give up after 10 tries).
+    mkdir -p "$CGROUP_ROOT/init"
+    _tries=0
+    while [ -n "$(cat "$CGROUP_ROOT/cgroup.procs" 2>/dev/null)" ] && [ "$_tries" -lt 10 ]; do
+        for _pid in $(cat "$CGROUP_ROOT/cgroup.procs"); do
             echo "$_pid" > "$CGROUP_ROOT/init/cgroup.procs" 2>/dev/null || true
-        done < "$CGROUP_ROOT/cgroup.procs"
-    fi
-
-    # Delegate controllers at the root. memory+pids are REQUIRED (the sandbox writes
-    # memory.max / pids.max); cpu is best-effort. An atomic "+memory +cpu +pids" write
-    # fails wholesale if any single controller is unavailable (e.g. cpu under some nested
-    # / WSL2 cgroup setups), so fall back to enabling them one at a time.
-    if ! echo "+memory +cpu +pids" > "$CGROUP_ROOT/cgroup.subtree_control" 2>/dev/null; then
-        for _ctrl in memory pids cpu; do
-            echo "+$_ctrl" > "$CGROUP_ROOT/cgroup.subtree_control" 2>/dev/null || true
         done
-    fi
+        _tries=$((_tries + 1))
+    done
+
+    delegate_controllers "$CGROUP_ROOT"
     if ! grep -qw memory "$CGROUP_ROOT/cgroup.subtree_control" 2>/dev/null; then
         echo "⚠  Failed to delegate the memory controller at $CGROUP_ROOT/cgroup.subtree_control."
         echo "   Run the container with --privileged (or --cgroupns=host). Jobs will be rejected."
         return 1
     fi
     mkdir -p "$CGROUP_ROOT/judge"
-    if ! echo "+memory +cpu +pids" > "$CGROUP_ROOT/judge/cgroup.subtree_control" 2>/dev/null; then
-        for _ctrl in memory pids cpu; do
-            echo "+$_ctrl" > "$CGROUP_ROOT/judge/cgroup.subtree_control" 2>/dev/null || true
-        done
-    fi
+    delegate_controllers "$CGROUP_ROOT/judge"
 
     # Verify: the per-job cgroups live at /judge/<uuid>, so memory must be enabled in
     # /judge's *subtree_control* (governs children) — not merely present in its controllers.
     if grep -qw memory "$CGROUP_ROOT/judge/cgroup.subtree_control" 2>/dev/null; then
-        echo "✓ cgroup v2 controllers (memory,cpu,pids) delegated to /judge subtree"
+        echo "✓ cgroup v2 controllers (memory[,cpu],pids) delegated to /judge subtree"
         return 0
     fi
     echo "⚠  /judge/cgroup.subtree_control is missing the memory controller — per-job limits will NOT enforce; jobs will be rejected."
@@ -76,8 +87,8 @@ if [ "$ENABLE_REDIS" = "true" ]; then
             --bind 0.0.0.0 \
             --port 6379 \
             --requirepass "$REDIS_PASSWORD" \
-            --maxmemory 16mb \
-            --maxmemory-policy allkeys-lru \
+            --maxmemory 64mb \
+            --maxmemory-policy noeviction \
             --save "" --appendonly no
         if [ -z "$JUDGE_REDIS" ]; then
             export JUDGE_REDIS="redis://:${REDIS_PASSWORD}@127.0.0.1:6379"
@@ -86,14 +97,14 @@ if [ "$ENABLE_REDIS" = "true" ]; then
         redis-server --daemonize yes \
             --bind 127.0.0.1 \
             --port 6379 \
-            --maxmemory 16mb \
-            --maxmemory-policy allkeys-lru \
+            --maxmemory 64mb \
+            --maxmemory-policy noeviction \
             --save "" --appendonly no
         if [ -z "$JUDGE_REDIS" ]; then
             export JUDGE_REDIS="redis://127.0.0.1:6379"
         fi
     fi
-    echo " Embedded Redis daemon started on :6379 (maxmemory: 16MB) ✓"
+    echo " Embedded Redis daemon started on :6379 (maxmemory: 64MB, noeviction) ✓"
 fi
 
 echo "----------------------------------------------"

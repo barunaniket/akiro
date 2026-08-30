@@ -18,7 +18,12 @@ impl LanguageRunner for Sql {
     }
 
     fn max_pids(&self) -> u32 {
-        2 // SQLite CLI is lightweight and single-threaded
+        // NOT 2: although SQLite itself is single-threaded, `get_run_command` wraps it in a
+        // shell PIPELINE (`sh -c '( ...cat... ) | sqlite3'`) that needs ~5 concurrent processes
+        // (sh + subshell + cat(s) + sqlite3 + test builtins). A cap of 2 makes fork() fail
+        // intermittently ("sh: Cannot fork") → spurious RuntimeError. 16 gives comfortable
+        // headroom while still bounding a fork bomb.
+        16
     }
 
     fn get_compile_command(&self, _src_path: &Path, _bin_path: &Path) -> Option<SandboxConfig> {
