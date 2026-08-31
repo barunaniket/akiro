@@ -65,6 +65,6 @@ mod tests {
         let sql = Sql;
         assert!(!sql.is_compiled());
         assert_eq!(sql.get_source_filename(), "solution.sql");
-        assert_eq!(sql.max_pids(), 2);
+        assert_eq!(sql.max_pids(), 16);
     }
 }

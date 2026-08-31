@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, ws::{WebSocket, WebSocketUpgrade}},
+    extract::{Path, State, ws::{Message, WebSocket, WebSocketUpgrade}},
     http::StatusCode,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -94,4 +94,78 @@ async fn handle_socket(socket: WebSocket, state: Arc<ApiState>) {
             _ => {}
         }
     }
+}
+
+/// WebSocket "buzzer": push the FINAL `JobResult` for `job_id` the instant it's ready, then
+/// close. Cluster-only (needs the ResultBus). Separate from `handle_websocket`, which streams
+/// live progress from the local pool and is unchanged.
+pub async fn handle_result_ws(
+    State(state): State<Arc<ApiState>>,
+    Path(job_id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    Ok(ws.on_upgrade(move |socket| handle_result_socket(socket, state, job_id)))
+}
+
+async fn handle_result_socket(socket: WebSocket, state: Arc<ApiState>, job_id: String) {
+    let (mut sender, mut receiver) = socket.split();
+
+    let bus = match &state.result_bus {
+        Some(b) => b.clone(),
+        None => {
+            let _ = sender
+                .send(Message::Text(
+                    serde_json::json!({ "error": "result push requires the Redis cluster" }).to_string(),
+                ))
+                .await;
+            let _ = sender.send(Message::Close(None)).await;
+            return;
+        }
+    };
+
+    // Fast paths: already done, or unknown id (never hang the socket on a non-existent job).
+    if let Some(result) = bus.try_result(&job_id).await {
+        if let Ok(json) = serde_json::to_string(&result) {
+            let _ = sender.send(Message::Text(json)).await;
+        }
+        let _ = sender.send(Message::Close(None)).await;
+        return;
+    }
+    if !bus.is_pending(&job_id).await {
+        let _ = sender
+            .send(Message::Text(
+                serde_json::json!({ "error": "unknown or expired job_id", "job_id": job_id }).to_string(),
+            ))
+            .await;
+        let _ = sender.send(Message::Close(None)).await;
+        return;
+    }
+
+    // In flight — wait for the buzzer, but bail if the client disconnects (cancels the wait,
+    // dropping its registry guard). Bounded by a deadline.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    tokio::select! {
+        res = bus.wait_for(&job_id, deadline) => {
+            match res {
+                Some(result) => {
+                    if let Ok(json) = serde_json::to_string(&result) {
+                        let _ = sender.send(Message::Text(json)).await;
+                    }
+                }
+                None => {
+                    let _ = sender.send(Message::Text(
+                        serde_json::json!({ "error": "timed out waiting for result", "job_id": job_id }).to_string(),
+                    )).await;
+                }
+            }
+        }
+        _ = async {
+            while let Some(msg) = receiver.next().await {
+                if matches!(msg, Ok(Message::Close(_)) | Err(_)) {
+                    break;
+                }
+            }
+        } => {}
+    }
+    let _ = sender.send(Message::Close(None)).await;
 }

@@ -1,5 +1,6 @@
 pub mod handlers;
 pub mod websocket;
+pub mod result_bus;
 
 use axum::{
     extract::{Request, State},
@@ -58,6 +59,9 @@ pub struct ApiState {
     pub start_time: std::time::Instant,
     pub redis_url: Option<String>,
     pub enabled_languages: Option<Arc<std::collections::HashSet<crate::languages::SupportedLanguage>>>,
+    /// Async result "buzzer" — `Some` iff a Redis cluster is configured. Powers the event-driven
+    /// wait for `POST /submit`, the async endpoints, and the WebSocket result push.
+    pub result_bus: Option<Arc<result_bus::ResultBus>>,
 }
 
 async fn auth_middleware(
@@ -89,23 +93,34 @@ async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
-pub fn create_router(
+pub async fn create_router(
     pool: Arc<JudgeWorkerPool>,
     secret: Option<String>,
     redis_url: Option<String>,
     enabled_languages: Option<Arc<std::collections::HashSet<crate::languages::SupportedLanguage>>>,
 ) -> Router {
+    // Spawn the async result bus when a cluster is configured (drives the buzzer + event-driven
+    // sync wait). None in local-only mode → async endpoints return 503, sync /submit uses the pool.
+    let result_bus = match &redis_url {
+        Some(u) => result_bus::ResultBus::spawn(u).await,
+        None => None,
+    };
+
     let state = Arc::new(ApiState {
         pool,
         secret,
         start_time: std::time::Instant::now(),
         redis_url,
         enabled_languages,
+        result_bus,
     });
 
     let protected_routes = Router::new()
         .route("/api/v1/submit", post(handlers::submit))
+        .route("/api/v1/submit/async", post(handlers::submit_async))
+        .route("/api/v1/result/:job_id", get(handlers::get_result))
         .route("/api/v1/ws/execute", get(websocket::handle_websocket))
+        .route("/api/v1/ws/result/:job_id", get(websocket::handle_result_ws))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
 
     let public_routes = Router::new()

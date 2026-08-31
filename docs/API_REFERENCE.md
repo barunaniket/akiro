@@ -25,8 +25,11 @@ If Akiro is launched with a `JUDGE_SECRET` configured, every HTTP request must i
 | :--- | :--- | :--- | :---: |
 | `GET` | `/health` | Cluster status, active workers, queue depth | Optional |
 | `GET` | `/metrics` | Prometheus telemetry metrics | Optional |
-| `POST` | `/api/v1/submit` | Execute code against test cases synchronously | Yes (if secret set) |
-| `GET` | `/api/v1/ws` | Real-time WebSocket streaming execution | Yes (if secret set) |
+| `POST` | `/api/v1/submit` | Execute code against test cases synchronously (blocks until verdict) | Yes (if secret set) |
+| `POST` | `/api/v1/submit/async` | Enqueue a job and return its `job_id` immediately (`202`) | Yes (if secret set) |
+| `GET` | `/api/v1/result/{job_id}` | Fetch a result: `200` done / `202` pending / `404` unknown | Yes (if secret set) |
+| `GET` | `/api/v1/ws/result/{job_id}` | Push the final result over WebSocket the instant it's ready | Yes (if secret set) |
+| `GET` | `/api/v1/ws/execute` | Real-time WebSocket streaming execution (local pool) | Yes (if secret set) |
 
 ---
 
@@ -100,15 +103,54 @@ X-Judge-Secret: <YOUR_SECRET_TOKEN>
 
 ---
 
+## 2. Async Submit & Result Retrieval (the "buzzer")
+
+For high throughput, don't hold a connection open for the whole job. **Submit async, then fetch the result** by polling or WebSocket push. The gateway no longer polls Redis — a worker rings a "bell" (`PUBLISH`) the instant a result lands. *(Requires the Redis cluster; on a local-only instance these return `503`.)*
+
+### 2a. `POST /api/v1/submit/async`
+Same request body as `/api/v1/submit`. Returns immediately:
+
+```json
+// 202 Accepted
+{ "job_id": "py-001", "status": "queued", "result_url": "/api/v1/result/py-001" }
+```
+- `409 Conflict` — a job with this `job_id` is already in flight. **Use a unique `job_id` per submission** (a UUID, or a monotonic id) — reusing an id that's still running is rejected.
+
+### 2b. `GET /api/v1/result/{job_id}`
+```json
+// 200 OK  -> the full JobResult (same schema as the sync response)
+// 202 Accepted -> { "job_id": "py-001", "status": "pending" }   (still running)
+// 404 Not Found -> { "error": "unknown or expired job_id", "job_id": "py-001" }
+```
+Idempotent — safe to poll repeatedly. Results are retained for `JUDGE_RESULT_TTL_SECS` (default **1800s**); fetch within that window.
+
+### 2c. `GET /api/v1/ws/result/{job_id}` (push)
+Open a WebSocket; the server sends the final `JobResult` as one JSON text frame the moment it's ready, then closes. No polling. If the result already exists it's sent instantly; an unknown id gets an error frame and close.
+
+**Example (submit async → WebSocket push):**
+```javascript
+await fetch(BASE + "/api/v1/submit/async", { method: "POST", headers, body });
+const ws = new WebSocket(`ws://host:8080/api/v1/ws/result/${jobId}`);
+ws.onmessage = (ev) => console.log("verdict:", JSON.parse(ev.data).verdict);
+```
+
+> The legacy `POST /api/v1/submit` still works unchanged (blocks, returns the full result) — it's just now event-driven internally, so it no longer polls either.
+
+---
+
 ## 🚦 HTTP Status Codes & Error Responses
 
 | Status Code | Reason | Description |
 | :--- | :--- | :--- |
 | **`200 OK`** | Success | Code was executed; full verdict results returned in body. |
+| **`202 Accepted`** | Queued / Pending | Async job enqueued (`submit/async`), or result not ready yet (`GET /result`). |
 | **`400 Bad Request`** | Invalid Request | Missing test cases, invalid JSON payload, or unsupported language. |
 | **`401 Unauthorized`** | Auth Failure | Missing or invalid `X-Judge-Secret` / Bearer token. |
 | **`403 Forbidden`** | Language Disabled | The requested language is excluded by the server's `ENABLED_LANGUAGES` whitelist. |
-| **`503 Service Unavailable`** | Backpressure | Server queue is saturated (tokio backpressure buffer full). |
+| **`404 Not Found`** | Unknown job | `job_id` not found, or its result TTL expired. |
+| **`409 Conflict`** | Duplicate | A job with this `job_id` is already in flight (async submit). |
+| **`503 Service Unavailable`** | Backpressure | Server queue saturated, or async endpoint used on a local-only (no-cluster) instance. |
+| **`504 Gateway Timeout`** | Slow result | Sync `/submit` gave up waiting for the cluster; fetch later via `GET /result/{job_id}`. |
 
 #### Example 403 Forbidden (Language Disabled by Whitelist):
 ```json

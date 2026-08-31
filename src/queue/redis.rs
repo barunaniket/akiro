@@ -78,6 +78,14 @@ impl RedisConsumer {
             num_workers
         );
 
+        // Result retention in Redis. Shorter than the old hard-coded 24h because results embed
+        // stdout/stderr and pile up under load; a result only needs to live long enough for the
+        // client to poll/receive it (and re-fetch after a gateway restart). Env-tunable.
+        let result_ttl: u64 = std::env::var("JUDGE_RESULT_TTL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1800);
+
         loop {
             // Heartbeat: register active worker node with 20-second TTL
             let heartbeat_key = format!("judge:heartbeat:{}", self.consumer_name);
@@ -178,12 +186,21 @@ impl RedisConsumer {
                                                                 };
 
                                                                 let result_key = format!("judge:results:{}", request.job_id);
+                                                                let pending_key = format!("judge:pending:{}", request.job_id);
+                                                                let done_channel = format!("judge:done:{}", request.job_id);
                                                                 let result_json = serde_json::to_string(&res_to_publish).unwrap_or_default();
 
                                                                 if let Ok(mut task_con) = client_clone.get_multiplexed_tokio_connection().await {
+                                                                    // Single pipe, in order: store the result (source of truth), clear the
+                                                                    // pending marker, ACK the stream, then RING THE BELL. SET precedes
+                                                                    // PUBLISH so any waiter woken by the bell is guaranteed to read the
+                                                                    // result (the async "buzzer"). Payload is just the job_id — a wake
+                                                                    // signal; results are large so waiters re-GET the key.
                                                                     let _: Result<(), _> = redis::pipe()
-                                                                        .cmd("SET").arg(&result_key).arg(&result_json).arg("EX").arg(86400)
+                                                                        .cmd("SET").arg(&result_key).arg(&result_json).arg("EX").arg(result_ttl)
+                                                                        .cmd("DEL").arg(&pending_key)
                                                                         .cmd("XACK").arg(&stream_key).arg(&consumer_group).arg(&msg_id)
+                                                                        .cmd("PUBLISH").arg(&done_channel).arg(&request.job_id)
                                                                         .query_async(&mut task_con)
                                                                         .await;
                                                                     tracing::info!("Job {} completed and result stored in Redis", request.job_id);

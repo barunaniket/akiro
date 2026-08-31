@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Path, State, Json},
     http::StatusCode,
 };
 use serde_json::json;
@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::orchestrator::JobRequest;
 use super::ApiState;
+use super::result_bus::EnqueueOutcome;
 
 #[derive(serde::Serialize)]
 pub struct HealthResponse {
@@ -162,103 +163,57 @@ pub async fn metrics(
     )
 }
 
-async fn submit_to_cluster(
-    redis_url: &str,
+/// Shared validation for every submit path: language support → whitelist → shape/size limits.
+/// On failure returns the exact `(status, body)` to send back.
+fn validate_submission(
+    state: &ApiState,
     request: &JobRequest,
-) -> Result<crate::orchestrator::JobResult, Box<dyn std::error::Error + Send + Sync>> {
-    let client = redis::Client::open(redis_url)?;
-    let mut con = client.get_multiplexed_tokio_connection().await?;
-
-    let job_json = serde_json::to_string(request)?;
-    let job_id = request.job_id.clone();
-    let result_key = format!("judge:results:{}", job_id);
-
-    // Publish job into Redis Stream
-    let _: () = redis::cmd("XADD")
-        .arg("judge:jobs")
-        .arg("*")
-        .arg("job")
-        .arg(&job_json)
-        .query_async(&mut con)
-        .await?;
-
-    // Wait for any cluster worker node to pick up and process the job (ample buffer for 200+ job stampedes)
-    let max_wait_ms = (request.time_limit_ms * request.test_cases.len() as u64 * 3 + 60_000).max(600_000);
-    let start = std::time::Instant::now();
-
-    while start.elapsed().as_millis() < max_wait_ms as u128 {
-        tokio::time::sleep(tokio::time::Duration::from_millis(15)).await;
-
-        let res: Option<String> = redis::cmd("GET")
-            .arg(&result_key)
-            .query_async(&mut con)
-            .await?;
-
-        if let Some(json_str) = res {
-            let result: crate::orchestrator::JobResult = serde_json::from_str(&json_str)?;
-            // Clean up result key asynchronously
-            let _: Result<(), _> = redis::cmd("DEL").arg(&result_key).query_async(&mut con).await;
-            return Ok(result);
-        }
-    }
-
-    Err("Job execution timed out waiting for cluster worker response".into())
-}
-
-pub async fn submit(
-    State(state): State<Arc<ApiState>>,
-    Json(request): Json<JobRequest>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    // Validate language
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let lang = match crate::languages::SupportedLanguage::from_str(&request.language) {
         Some(l) => l,
         None => {
-            return (
+            return Err((
                 StatusCode::BAD_REQUEST,
                 Json(json!({
                     "error": format!("Unsupported language: {}", request.language),
                     "supported": crate::languages::SupportedLanguage::all_canonical_names()
                 })),
-            );
+            ));
         }
     };
 
-    // Check language whitelist if configured
     if let Some(whitelist) = &state.enabled_languages {
         if !whitelist.contains(&lang) {
             let mut enabled_list: Vec<&'static str> = whitelist.iter().map(|l| l.as_str()).collect();
             enabled_list.sort();
-            return (
+            return Err((
                 StatusCode::FORBIDDEN,
                 Json(json!({
                     "error": format!("Language '{}' is disabled on this judge instance", request.language),
                     "enabled_languages": enabled_list
                 })),
-            );
+            ));
         }
     }
 
-    // Validate submission shape & size limits (testcase count, payload sizes, limits)
     if let Err(msg) = request.validate() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": msg })),
-        );
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": msg }))));
     }
+    Ok(())
+}
 
-    // If Redis cluster is configured, dispatch across all distributed worker nodes
-    if let Some(ref redis_url) = state.redis_url {
-        match submit_to_cluster(redis_url, &request).await {
-            Ok(result) => return (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
-            Err(e) => {
-                tracing::warn!("Cluster queue dispatch error: {}. Falling back to local worker pool.", e);
-            }
-        }
-    }
+/// Max time the gateway waits for a cluster result; also bounds the pending-marker TTL.
+fn max_wait_ms(request: &JobRequest) -> u64 {
+    (request.time_limit_ms * request.test_cases.len() as u64 * 3 + 60_000).max(600_000)
+}
 
-    // Fallback to local in-memory worker pool
+/// Run a job on the local in-memory worker pool (no cluster, or Redis unreachable).
+async fn submit_local(
+    state: &ApiState,
+    request: JobRequest,
+) -> (StatusCode, Json<serde_json::Value>) {
     match state.pool.submit(request, None).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap())),
+        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
         Err(e) if e == "QUEUE_FULL" => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -266,9 +221,121 @@ pub async fn submit(
                 "retry_after_secs": 3
             })),
         ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e })),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))),
+    }
+}
+
+/// Synchronous submit — **unchanged contract** (`200 { JobResult }`), but now event-driven:
+/// enqueue once, then wait on the result "buzzer" (no 15 ms polling). Falls back to the local
+/// pool ONLY if the enqueue itself fails (Redis down) — never on a wait-timeout, which would
+/// re-execute a merely-slow job (the old double-execution bug).
+pub async fn submit(
+    State(state): State<Arc<ApiState>>,
+    Json(mut request): Json<JobRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(resp) = validate_submission(&state, &request) {
+        return resp;
+    }
+    if request.job_id.is_empty() {
+        request.job_id = uuid::Uuid::new_v4().to_string();
+    }
+
+    if let Some(bus) = &state.result_bus {
+        let wait = max_wait_ms(&request);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait);
+        match bus.enqueue(&request, wait / 1000 + 60).await {
+            // Queued, or a duplicate already in flight — either way, wait for THAT result (never
+            // re-run). Duplicate here means a retry of the same job_id; we attach to the existing run.
+            EnqueueOutcome::Queued | EnqueueOutcome::Duplicate => {
+                return match bus.wait_for(&request.job_id, deadline).await {
+                    Some(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+                    None => (
+                        StatusCode::GATEWAY_TIMEOUT,
+                        Json(json!({
+                            "error": "timed out waiting for cluster result; retry GET /api/v1/result/{job_id}",
+                            "job_id": request.job_id
+                        })),
+                    ),
+                };
+            }
+            EnqueueOutcome::RedisDown => {
+                tracing::warn!(
+                    "Cluster enqueue failed (Redis down); falling back to local pool for job {}",
+                    request.job_id
+                );
+                // fall through to the local pool
+            }
+        }
+    }
+
+    submit_local(&state, request).await
+}
+
+/// Async submit — enqueue and return immediately with the `job_id`. The result is retrieved via
+/// `GET /api/v1/result/:job_id` or the WebSocket push. Cluster-only.
+pub async fn submit_async(
+    State(state): State<Arc<ApiState>>,
+    Json(mut request): Json<JobRequest>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if let Err(resp) = validate_submission(&state, &request) {
+        return resp;
+    }
+    if request.job_id.is_empty() {
+        request.job_id = uuid::Uuid::new_v4().to_string();
+    }
+
+    let bus = match &state.result_bus {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "async submit requires the Redis cluster (JUDGE_REDIS not configured)" })),
+            );
+        }
+    };
+
+    let wait = max_wait_ms(&request);
+    match bus.enqueue(&request, wait / 1000 + 60).await {
+        EnqueueOutcome::Queued => (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "job_id": request.job_id,
+                "status": "queued",
+                "result_url": format!("/api/v1/result/{}", request.job_id)
+            })),
+        ),
+        EnqueueOutcome::Duplicate => (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "job_id already in-flight", "job_id": request.job_id })),
+        ),
+        EnqueueOutcome::RedisDown => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "queue unavailable (Redis unreachable)", "job_id": request.job_id })),
         ),
     }
+}
+
+/// Fetch a result by id: `200 {JobResult}` | `202 {status:"pending"}` | `404` unknown/expired.
+/// Idempotent — does not delete the key (relies on the result TTL). Cluster-only.
+pub async fn get_result(
+    State(state): State<Arc<ApiState>>,
+    Path(job_id): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let bus = match &state.result_bus {
+        Some(b) => b,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": "result lookup requires the Redis cluster" })),
+            );
+        }
+    };
+
+    if let Some(result) = bus.try_result(&job_id).await {
+        return (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default()));
+    }
+    if bus.is_pending(&job_id).await {
+        return (StatusCode::ACCEPTED, Json(json!({ "job_id": job_id, "status": "pending" })));
+    }
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "unknown or expired job_id", "job_id": job_id })))
 }
