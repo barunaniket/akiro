@@ -189,9 +189,22 @@ async fn run_all(
             .await;
     });
 
-    // Start Redis consumer
-    let consumer = RedisConsumer::new(redis_url.to_string(), pool, None, None);
-    consumer.run().await?;
+    // Start the Redis job consumer — UNLESS this node is control-plane-only (workers=0). In that
+    // case it runs the gateway + embedded Redis broker but consumes NO jobs itself, dispatching all
+    // execution to remote worker nodes. On a small control-plane box this frees its cores from
+    // execution contention so it can feed/collect for the fleet at full speed (measured: a 2-core
+    // leader running gateway+Redis+2 workers pins at 100% and throttles remote workers). If a
+    // consumer with 0 workers were started it would claim jobs it can't run and strand them, so we
+    // must skip it entirely.
+    if pool.num_workers() > 0 {
+        let consumer = RedisConsumer::new(redis_url.to_string(), pool, None, None);
+        consumer.run().await?;
+    } else {
+        tracing::info!(
+            "Control-plane-only mode (workers=0): gateway + Redis broker up; NOT consuming judge:jobs — all execution dispatched to remote workers."
+        );
+        shutdown_signal().await;
+    }
 
     Ok(())
 }
