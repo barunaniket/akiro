@@ -112,7 +112,12 @@ If connecting a secondary cloud instance (e.g. AWS EC2, GCP Compute Engine, Hetz
 | `JUDGE_MODE` | Operational mode: `server`, `worker`, or `all` | `worker` |
 | `JUDGE_REDIS` | Redis connection URL with auth password | `redis://:<SECRET>@<HOST>:<PORT>` |
 | `JUDGE_WORKERS` | Number of worker execution threads | `auto` (matches host CPU core count) or explicit integer (e.g. `8`) |
+| `JUDGE_RESULT_TTL_SECS` | How long a finished result is retained in Redis for the client to fetch | `1800` (30 min) |
+| `JUDGE_RECLAIM_MIN_IDLE_MS` | A claimed-but-unacked job is treated as *orphaned* (its worker died/dropped mid-job) once it has sat this long in the consumer-group PEL, and is reclaimed + re-driven to completion by any live worker. Keep it **above your worst-case legitimate job runtime** so healthy in-progress jobs aren't reclaimed and re-run. Lower it for short-job contests to recover faster. | `300000` (5 min) |
+| `JUDGE_RECLAIM_INTERVAL_MS` | How often each worker runs the `XAUTOCLAIM` orphan-reclaim sweep | `15000` (15 s) |
 | `RUST_LOG` | Logging verbosity | `info` (or `debug` for troubleshooting) |
+
+> **Fault tolerance (multi-node):** when you connect several machines (contest time), a worker that dies or loses its Redis link mid-job would otherwise strand that job in the consumer-group pending list until the client times out. Two mechanisms prevent this: (1) the worker **retries its result-publish** (~20 s, reconnecting each attempt) so a transient network blip never strands a job it already finished; and (2) every worker periodically runs an **`XAUTOCLAIM` reclaim sweep** that re-drives any orphaned job — first re-fetching its result (to avoid a needless re-run when the original worker landed the result but not the ACK), otherwise re-running it. This is what lets the cluster tolerate flaky/leaving nodes instead of losing their in-flight jobs.
 
 ---
 
