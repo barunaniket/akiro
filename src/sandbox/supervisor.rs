@@ -193,8 +193,17 @@ pub async fn read_pipe_output(fd: c_int, max_bytes: usize) -> Result<Vec<u8>, Su
                     chunk.len(),
                 )
             };
-            if ret <= 0 {
-                break;
+            if ret < 0 {
+                // A blocking read interrupted by a signal (e.g. the reaper's SIGCHLD storm
+                // under heavy concurrency) returns EINTR — retry, do NOT treat it as EOF, or
+                // we would drop the child's output and score a correct run as WrongAnswer.
+                if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                break; // genuine read error
+            }
+            if ret == 0 {
+                break; // EOF: all write-ends of the pipe are closed
             }
             let bytes_read = ret as usize;
             if buffer.len() + bytes_read > max_bytes {

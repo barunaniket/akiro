@@ -165,9 +165,29 @@ impl Sandbox {
                 // would otherwise wait forever. 5s is well beyond any real input feed.
                 let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), stdin_handle).await;
 
-                let drain_timeout = tokio::time::Duration::from_millis(250);
+                // Drain the child's captured stdout/stderr. The child has exited and the parent
+                // closed its write-ends at fork, so EOF is guaranteed and a *scheduled* read
+                // finishes in microseconds — this timeout is only a backstop against a truly
+                // stuck read. It was hardcoded at 250ms, which under heavy CPU overcommit (many
+                // inflight jobs starving the spawn_blocking read task of a timeslice) could expire
+                // before the read grabbed the buffered output → empty stdout → a CORRECT run
+                // scored as WrongAnswer. 5s default, env-tunable. A fired timeout is LOGGED, never
+                // silently swallowed into a wrong verdict.
+                let drain_timeout_ms: u64 = std::env::var("JUDGE_DRAIN_TIMEOUT_MS")
+                    .ok().and_then(|s| s.parse().ok()).unwrap_or(5000);
+                let drain_timeout = tokio::time::Duration::from_millis(drain_timeout_ms);
                 let stdout_res = tokio::time::timeout(drain_timeout, stdout_future).await;
                 let stderr_res = tokio::time::timeout(drain_timeout, stderr_future).await;
+
+                if stdout_res.is_err() {
+                    tracing::warn!(
+                        "stdout drain timed out after {}ms (jail_id={}) — output may be truncated, risking a spurious WrongAnswer",
+                        drain_timeout_ms, config.jail_id
+                    );
+                }
+                if stderr_res.is_err() {
+                    tracing::warn!("stderr drain timed out after {}ms (jail_id={})", drain_timeout_ms, config.jail_id);
+                }
 
                 let out = stdout_res.ok().and_then(|r| r.ok()).unwrap_or_default();
                 let err = stderr_res.ok().and_then(|r| r.ok()).unwrap_or_default();
