@@ -37,14 +37,17 @@ impl LanguageRunner for Sql {
         time_limit_ms: u64,
         memory_limit_bytes: u64,
     ) -> SandboxConfig {
-        // Pipes (optional init.sql) -> solution.sql -> (optional verify.sql) -> (optional stdin) into in-memory SQLite3
+        // Pipes (optional init.sql) -> solution.sql -> (optional verify.sql) -> (optional stdin) into in-memory SQLite3.
+        // `-safe` disables sqlite3's dangerous dot-commands (.shell, .system, .read, .load,
+        // .open/.output on files) and filesystem/extension access, so a submission's SQL can't
+        // spawn a jailed shell or touch files. Normal SELECT/CREATE/INSERT are unaffected.
         let cmd = r#"
             (
                 if [ -f /sandbox/init.sql ]; then cat /sandbox/init.sql; fi
                 cat /sandbox/solution.sql
                 if [ -f /sandbox/verify.sql ]; then cat /sandbox/verify.sql; fi
                 cat -
-            ) | sqlite3 -header -csv :memory:
+            ) | sqlite3 -safe -header -csv :memory:
         "#;
 
         SandboxConfig::new(std::path::PathBuf::from("/bin/sh"))

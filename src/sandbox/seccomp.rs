@@ -154,6 +154,15 @@ pub fn blocked_syscalls() -> Vec<&'static str> {
         // Privileged kernel interfaces
         "bpf",
         "perf_event_open",
+        // Modern kernel-exploitation primitives. io_uring submits operations to the kernel OUT
+        // OF BAND of seccomp (a syscall filter can't see them) and has a long local-privesc CVE
+        // history; userfaultfd is a classic heap-grooming / race-window exploit aid. No
+        // competitive-programming runtime needs these — blocking returns EPERM, so a runtime that
+        // probes io_uring just falls back to epoll / normal I/O.
+        "io_uring_setup",
+        "io_uring_enter",
+        "io_uring_register",
+        "userfaultfd",
         // Kernel keyring
         "add_key",
         "keyctl",
@@ -190,6 +199,10 @@ fn blocked_syscall_numbers() -> Vec<libc::c_long> {
         libc::SYS_reboot,
         libc::SYS_bpf,
         libc::SYS_perf_event_open,
+        libc::SYS_io_uring_setup,
+        libc::SYS_io_uring_enter,
+        libc::SYS_io_uring_register,
+        libc::SYS_userfaultfd,
         libc::SYS_add_key,
         libc::SYS_keyctl,
         libc::SYS_request_key,
@@ -266,6 +279,11 @@ mod tests {
         assert!(blocked.contains(&"init_module"));
         assert!(blocked.contains(&"reboot"));
         assert!(blocked.contains(&"bpf"));
+        // Modern kernel-exploitation primitives
+        assert!(blocked.contains(&"io_uring_setup"));
+        assert!(blocked.contains(&"io_uring_enter"));
+        assert!(blocked.contains(&"io_uring_register"));
+        assert!(blocked.contains(&"userfaultfd"));
     }
 
     #[test]
