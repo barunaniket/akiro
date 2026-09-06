@@ -18,6 +18,14 @@ pub struct SandboxConfig {
     pub work_dir: Option<PathBuf>,
     pub profile: ExecutionProfile,
     pub pids_limit: u32,
+    /// Per-sandbox CPU bandwidth cap, expressed as a percentage of ONE core (100 = 1.0 core),
+    /// written to the cgroup's `cpu.max`. `None` leaves the cgroup unthrottled (`max`).
+    ///
+    /// This exists to bound the *syscall rate* a single job can sustain, not just its CPU share:
+    /// a `while(1) fork();` bomb is already contained by `pids.max`, but with no bandwidth cap its
+    /// surviving tasks issue failing `fork()`s as fast as the CPU allows, and that contends on
+    /// kernel process-creation locks host-wide — starving every other job's compile/exec.
+    pub cpu_max_percent: Option<u32>,
     pub enable_network_isolation: bool,
     pub enable_fs_isolation: bool,
     pub workspace_dir: Option<PathBuf>,
@@ -43,6 +51,7 @@ impl SandboxConfig {
             work_dir: None,
             profile: ExecutionProfile::Run,
             pids_limit: 128,
+            cpu_max_percent: None,
             enable_network_isolation: true,
             enable_fs_isolation: true,
             workspace_dir: None,
@@ -70,6 +79,7 @@ impl SandboxConfig {
             work_dir: Some(work_dir.clone()),
             profile: ExecutionProfile::Compile,
             pids_limit: 128,
+            cpu_max_percent: None,
             enable_network_isolation: false,
             enable_fs_isolation: false,
             workspace_dir: Some(work_dir),
@@ -98,6 +108,7 @@ impl SandboxConfig {
             work_dir: Some(PathBuf::from("/sandbox")),
             profile: ExecutionProfile::Run,
             pids_limit,
+            cpu_max_percent: None,
             enable_network_isolation: true,
             enable_fs_isolation: true,
             workspace_dir: Some(workspace_dir),
@@ -156,6 +167,13 @@ impl SandboxConfig {
 
     pub fn with_pids_limit(mut self, limit: u32) -> Self {
         self.pids_limit = limit;
+        self
+    }
+
+    /// Set the cgroup CPU bandwidth cap as a percentage of one core (100 = 1.0 core).
+    /// `None` (or `Some(0)`) leaves the cgroup unthrottled.
+    pub fn with_cpu_max_percent(mut self, percent: Option<u32>) -> Self {
+        self.cpu_max_percent = percent.filter(|p| *p > 0);
         self
     }
 

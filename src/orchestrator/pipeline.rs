@@ -56,6 +56,7 @@ impl ExecutionPipeline {
                     .with_fs_isolation(false)
                     .with_network_isolation(false)
                     .with_pids_limit(1024)
+                    .with_cpu_max_percent(crate::sandbox::admission::compile_cpu_max_percent())
                     .with_memory_limit(compile_mem)
                     .with_work_dir(temp_dir.path().to_path_buf());
 
@@ -129,7 +130,8 @@ impl ExecutionPipeline {
             .with_workspace_dir(work_dir.to_path_buf())
             .with_work_dir(std::path::PathBuf::from("/sandbox"))
             .with_network_isolation(true)
-            .with_pids_limit(runner.max_pids());
+            .with_pids_limit(runner.max_pids())
+            .with_cpu_max_percent(crate::sandbox::admission::run_cpu_max_percent());
 
             let expected = test_case.expected_output.clone();
             let time_limit_ms = request.time_limit_ms;

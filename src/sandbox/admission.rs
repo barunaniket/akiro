@@ -90,6 +90,43 @@ pub fn compile_memory_bytes() -> u64 {
     env_bytes("JUDGE_COMPILE_MEMORY_BYTES", DEFAULT_COMPILE_BYTES)
 }
 
+/// Default per-RUN CPU bandwidth cap, as a percentage of one core. 100 = 1.0 core, which leaves
+/// the single-threaded solutions that dominate competitive programming completely unaffected
+/// (they cannot use more than one core anyway) while denying any one job the whole machine.
+const DEFAULT_RUN_CPU_PERCENT: u32 = 100;
+
+/// Default COMPILE-phase CPU cap. Slightly wider than a run: some compilers (go, rustc, javac)
+/// legitimately use a few threads, and the compile phase is not attacker-controlled code.
+const DEFAULT_COMPILE_CPU_PERCENT: u32 = 200;
+
+/// Parse a CPU percentage from an env var. `0`, `off`, `none`, and `unlimited` all disable the
+/// cap (returning `None`); garbage falls back to `default`.
+fn env_cpu_percent(key: &str, default: u32) -> Option<u32> {
+    let raw = match std::env::var(key) {
+        Ok(v) => v,
+        Err(_) => return Some(default),
+    };
+    let t = raw.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return Some(default);
+    }
+    if matches!(t.as_str(), "0" | "off" | "none" | "unlimited" | "max") {
+        return None;
+    }
+    Some(t.parse::<u32>().unwrap_or(default)).filter(|p| *p > 0)
+}
+
+/// Per-run CPU bandwidth cap (`JUDGE_CPU_MAX_PERCENT`, default 100 = one core).
+/// Returns `None` when explicitly disabled, which restores the old unthrottled behaviour.
+pub fn run_cpu_max_percent() -> Option<u32> {
+    env_cpu_percent("JUDGE_CPU_MAX_PERCENT", DEFAULT_RUN_CPU_PERCENT)
+}
+
+/// Compile-phase CPU bandwidth cap (`JUDGE_COMPILE_CPU_MAX_PERCENT`, default 200 = two cores).
+pub fn compile_cpu_max_percent() -> Option<u32> {
+    env_cpu_percent("JUDGE_COMPILE_CPU_MAX_PERCENT", DEFAULT_COMPILE_CPU_PERCENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -87,6 +87,34 @@ impl CgroupManager {
             write_cgroup_file(&pids_max_path, &config.pids_limit.to_string())?;
         }
 
+        // CPU bandwidth cap (`cpu.max = "<quota_us> <period_us>"`). `pids.max` bounds how MANY
+        // tasks a job gets; this bounds how much CPU those tasks get, which in turn bounds the
+        // rate at which they can hammer the kernel with syscalls. Without it a fork bomb whose
+        // forks all fail (pids.max reached) still spins at full speed and contends on
+        // process-creation locks host-wide, stalling unrelated jobs.
+        //
+        // Best-effort by design: `entrypoint.sh` delegates `+cpu` opportunistically (WSL2 and some
+        // managed kernels reject it), so a missing `cpu.max` must not fail an otherwise valid job.
+        // Warn once instead of per-job so the gap is visible without flooding the log.
+        if let Some(percent) = config.cpu_max_percent {
+            let period_us: u64 = 100_000;
+            let quota_us = (percent as u64).saturating_mul(period_us) / 100;
+            let cpu_max_path = self.cgroup_path.join("cpu.max");
+            if write_cgroup_file(&cpu_max_path, &format!("{} {}", quota_us.max(1000), period_us))
+                .is_err()
+            {
+                static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+                WARN_ONCE.call_once(|| {
+                    tracing::warn!(
+                        "cpu.max is not writable under /sys/fs/cgroup/judge — the `cpu` controller \
+                         was not delegated. Per-job CPU bandwidth limits are DISABLED, so a single \
+                         job can saturate host CPU and slow every other job. Run the container with \
+                         --privileged on a kernel that allows `+cpu` delegation."
+                    );
+                });
+            }
+        }
+
         // Process count and memory limits configured
         Ok(())
     }
