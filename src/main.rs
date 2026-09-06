@@ -62,6 +62,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
+    // Fail closed on an explicitly auth-required deployment. This judge runs arbitrary submitted
+    // code, so an unauthenticated public listener is a remote-code-execution endpoint. Auth stays
+    // optional by default (local dev, and the documented single-node quickstart), but setting
+    // JUDGE_REQUIRE_AUTH=1 turns "no secret" into a startup error instead of a silent open door.
+    if akiro::api::require_auth_enabled() && args.secret.is_none() {
+        return Err(
+            "JUDGE_REQUIRE_AUTH is set but no JUDGE_SECRET was provided — refusing to start an \
+             unauthenticated judge. Set JUDGE_SECRET (or unset JUDGE_REQUIRE_AUTH for local use)."
+                .into(),
+        );
+    }
+
     #[cfg(target_os = "linux")]
     unsafe {
         libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);

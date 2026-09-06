@@ -64,6 +64,31 @@ pub struct ApiState {
     pub result_bus: Option<Arc<result_bus::ResultBus>>,
 }
 
+/// Constant-time byte comparison for the API secret.
+///
+/// `a != b` on `&str` short-circuits at the first differing byte, so response latency leaks a
+/// prefix-match oracle that lets an attacker recover the secret byte by byte. This compares every
+/// byte unconditionally. The length check is deliberately NOT constant-time: secret *length* is
+/// far less useful to an attacker than its contents, and hiding it needs a hash-based compare.
+fn secret_eq(provided: &[u8], expected: &[u8]) -> bool {
+    if provided.len() != expected.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (a, b) in provided.iter().zip(expected.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+/// True when `JUDGE_REQUIRE_AUTH` is set to a truthy value. When set, starting without a
+/// `JUDGE_SECRET` is a hard configuration error rather than a silently open judge.
+pub fn require_auth_enabled() -> bool {
+    std::env::var("JUDGE_REQUIRE_AUTH")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
 async fn auth_middleware(
     State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
@@ -81,7 +106,11 @@ async fn auth_middleware(
                     .and_then(|v| v.strip_prefix("Bearer "))
             });
 
-        if provided != Some(expected_secret.as_str()) {
+        let authorized = provided
+            .map(|p| secret_eq(p.as_bytes(), expected_secret.as_bytes()))
+            .unwrap_or(false);
+
+        if !authorized {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({
@@ -105,6 +134,15 @@ pub async fn create_router(
         Some(u) => result_bus::ResultBus::spawn(u).await,
         None => None,
     };
+
+    if secret.is_none() {
+        tracing::warn!(
+            "AUTHENTICATION IS DISABLED — no JUDGE_SECRET is set, so every /api/v1 endpoint is \
+             open to anyone who can reach this port. This judge executes arbitrary submitted \
+             code: do NOT expose it on a public interface in this state. Set JUDGE_SECRET, and \
+             set JUDGE_REQUIRE_AUTH=1 to make starting without one a hard error."
+        );
+    }
 
     let state = Arc::new(ApiState {
         pool,
