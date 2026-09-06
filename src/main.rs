@@ -66,10 +66,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // code, so an unauthenticated public listener is a remote-code-execution endpoint. Auth stays
     // optional by default (local dev, and the documented single-node quickstart), but setting
     // JUDGE_REQUIRE_AUTH=1 turns "no secret" into a startup error instead of a silent open door.
-    if akiro::api::require_auth_enabled() && args.secret.is_none() {
+    // An empty/whitespace-only JUDGE_SECRET is collapsed to "no secret". Left as `Some("")` it
+    // produces auth that REJECTS requests with no header but ACCEPTS an empty one — a judge that
+    // looks locked and is not. Deployments hit this by accident: `-e JUDGE_SECRET=${JUDGE_SECRET}`
+    // in a systemd unit without `Environment=`/`EnvironmentFile=` expands to the empty string.
+    let secret_was_set = args.secret.is_some();
+    let api_secret = akiro::api::normalize_secret(args.secret);
+    if secret_was_set && api_secret.is_none() {
+        tracing::error!(
+            "JUDGE_SECRET is set but empty — treating it as UNSET. If you intended to enable \
+             authentication, your secret is not reaching the process — a systemd unit needs an \
+             explicit Environment= or EnvironmentFile= directive, as it does not inherit the \
+             invoking shell's environment."
+        );
+    }
+
+    if akiro::api::require_auth_enabled() && api_secret.is_none() {
         return Err(
-            "JUDGE_REQUIRE_AUTH is set but no JUDGE_SECRET was provided — refusing to start an \
-             unauthenticated judge. Set JUDGE_SECRET (or unset JUDGE_REQUIRE_AUTH for local use)."
+            "JUDGE_REQUIRE_AUTH is set but no usable JUDGE_SECRET was provided (unset or empty) — \
+             refusing to start an unauthenticated judge. Set JUDGE_SECRET to a non-empty value \
+             (or unset JUDGE_REQUIRE_AUTH for local use)."
                 .into(),
         );
     }
@@ -115,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match args.mode {
         RunMode::Server => {
             tracing::info!("Starting Akiro in SERVER mode on port {}", args.port);
-            run_server(pool, receiver, args.port, args.secret, enabled_languages).await?;
+            run_server(pool, receiver, args.port, api_secret, enabled_languages).await?;
         }
         RunMode::Worker => {
             tracing::info!("Starting Akiro in WORKER mode (Redis consumer)");
@@ -123,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         RunMode::All => {
             tracing::info!("Starting Akiro in ALL mode (server + worker pool)");
-            run_all(pool, receiver, args.port, args.secret, &args.redis, enabled_languages).await?;
+            run_all(pool, receiver, args.port, api_secret, &args.redis, enabled_languages).await?;
         }
     }
 

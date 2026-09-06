@@ -81,6 +81,22 @@ fn secret_eq(provided: &[u8], expected: &[u8]) -> bool {
     diff == 0
 }
 
+/// Normalize a configured API secret: an empty or whitespace-only value is treated as ABSENT.
+///
+/// `JUDGE_SECRET=""` is a *worse* state than no secret at all. `Some("")` still takes the auth
+/// branch, so a request with no header is rejected (the judge looks protected) while a request
+/// sending an empty `X-Judge-Secret` is accepted — an open judge wearing a lock. It is also the
+/// state a deployment falls into by accident: `-e JUDGE_SECRET=${JUDGE_SECRET}` in a systemd unit
+/// with no `Environment=`/`EnvironmentFile=` expands to empty, because systemd does not inherit
+/// the invoking shell's environment.
+///
+/// Collapsing it to `None` makes the judge honestly unauthenticated (loud warning, and a hard
+/// error under `JUDGE_REQUIRE_AUTH`) instead of silently bypassable. A secret that merely has
+/// surrounding whitespace is preserved verbatim — only an entirely blank value is discarded.
+pub fn normalize_secret(secret: Option<String>) -> Option<String> {
+    secret.filter(|s| !s.trim().is_empty())
+}
+
 /// True when `JUDGE_REQUIRE_AUTH` is set to a truthy value. When set, starting without a
 /// `JUDGE_SECRET` is a hard configuration error rather than a silently open judge.
 pub fn require_auth_enabled() -> bool {
@@ -135,6 +151,8 @@ pub async fn create_router(
         None => None,
     };
 
+    let secret = normalize_secret(secret);
+
     if secret.is_none() {
         tracing::warn!(
             "AUTHENTICATION IS DISABLED — no JUDGE_SECRET is set, so every /api/v1 endpoint is \
@@ -172,4 +190,38 @@ pub async fn create_router(
         .layer(build_cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_secret_discards_blank_values() {
+        // The bug this guards: `Some("")` takes the auth branch, so a request with NO header is
+        // rejected while a request with an EMPTY header is accepted — auth that looks enabled and
+        // is trivially bypassable.
+        assert_eq!(normalize_secret(None), None);
+        assert_eq!(normalize_secret(Some(String::new())), None);
+        assert_eq!(normalize_secret(Some("   ".into())), None);
+        assert_eq!(normalize_secret(Some("\t\n".into())), None);
+    }
+
+    #[test]
+    fn normalize_secret_preserves_real_secrets_verbatim() {
+        assert_eq!(normalize_secret(Some("s3cr3t".into())), Some("s3cr3t".into()));
+        // Surrounding whitespace is part of the secret, not something to silently trim away:
+        // trimming would make a configured secret and a differently-padded one interchangeable.
+        assert_eq!(normalize_secret(Some(" pad ".into())), Some(" pad ".into()));
+    }
+
+    #[test]
+    fn secret_eq_matches_only_exact_bytes() {
+        assert!(secret_eq(b"token", b"token"));
+        assert!(!secret_eq(b"token", b"tokeN"));
+        assert!(!secret_eq(b"tok", b"token"));
+        assert!(!secret_eq(b"", b"token"));
+        assert!(!secret_eq(b"token", b""));
+        assert!(secret_eq(b"", b""));
+    }
 }
