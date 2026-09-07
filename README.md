@@ -277,6 +277,7 @@ curl -X POST https://<HOST>/api/v1/submit \
 Detailed architectural, operational, and development documentation can be found in the [`docs/`](docs/) directory:
 
 - 🚀 [`docs/QUICKSTART.md`](docs/QUICKSTART.md): 2-minute step-by-step setup, launch modes, and verification.
+- 🖥️ [`docs/WORKER_NODES.md`](docs/WORKER_NODES.md): One-line worker join (`curl | bash -- <TOKEN>`), auto-tuning, verification, and scaling guidance for contests.
 - 📡 [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md): REST & WebSocket API specification, payload schemas, and client examples (Python, JS/TS, Go, Rust, cURL).
 - 🌐 [`docs/LANGUAGES.md`](docs/LANGUAGES.md): Complete 18-language guide, compiler flags, and competitive programming templates.
 - 📖 [`docs/DUAL_TOKEN_ARCHITECTURE.md`](docs/DUAL_TOKEN_ARCHITECTURE.md): Multi-node cluster scaling, dual tokens (`JUDGE_SECRET` & `CLUSTER_TOKEN`), and volunteer joining.
