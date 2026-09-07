@@ -119,6 +119,7 @@ Akiro ships with conservative defaults sized for a small **2‑core / 1 GB** VM.
 | `JUDGE_CPU_MAX_PERCENT` | `100` | **Per‑run CPU bandwidth cap**, as a percent of one core, written to each job's `cpu.max`. `pids.max` bounds how *many* tasks a job gets; this bounds how much CPU they get, which caps the syscall rate one job can sustain against the kernel. `0`/`off` disables the cap. |
 | `JUDGE_COMPILE_CPU_MAX_PERCENT` | `200` | Same cap for the compile phase, which legitimately uses a few threads. |
 | `JUDGE_REQUIRE_AUTH` | *(unset)* | When truthy, refuse to start unless `JUDGE_SECRET` is set. Turns an unauthenticated public judge from a silent default into a startup error. **Set this in production.** |
+| `JUDGE_STREAM_MAXLEN` | `10000` | Approximate cap on the `judge:jobs` Redis stream length (`MAXLEN ~`). The stream is a transport queue whose entries are never removed on ACK; without a cap it grows until Redis (64MB, noeviction) rejects writes and submissions fail. `0` disables trimming. |
 | `JUDGE_CORS_ALLOW_ORIGIN` | *(permissive)* | CORS allow‑list; set to your frontend origin(s) in production. |
 
 > On a 1 GB VM the `768m` budget yields ~3 × 256 MB execution slots — e.g. two 256 MB runs with headroom, or one 512 MB compile alongside one run. Scale `JUDGE_MEM_BUDGET_BYTES` (and `JUDGE_MAX_MEMORY_BYTES`) up proportionally on larger hosts. Keep `JUDGE_MAX_MEMORY_BYTES` **≤** `JUDGE_MEM_BUDGET_BYTES`, or admission will under‑account a single large job.

@@ -19,6 +19,22 @@ use tokio::sync::broadcast;
 
 use crate::orchestrator::{JobRequest, JobResult};
 
+/// Approximate cap on the `judge:jobs` stream length, read once from `JUDGE_STREAM_MAXLEN`
+/// (default 10000; `0` disables trimming). The stream is a transport queue, not storage: every
+/// XADD appends an entry that is never removed on ACK, so without a cap it grows unbounded until
+/// Redis (maxmemory 64MB, noeviction) rejects new writes and submissions start failing. `MAXLEN ~`
+/// lets Redis trim in whole macro-nodes (near-zero cost) rather than exactly on every add.
+fn stream_maxlen() -> u64 {
+    use std::sync::OnceLock;
+    static V: OnceLock<u64> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("JUDGE_STREAM_MAXLEN")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(10_000)
+    })
+}
+
 type Registry = Arc<Mutex<HashMap<String, broadcast::Sender<()>>>>;
 
 /// Outcome of trying to enqueue a job.
@@ -154,8 +170,14 @@ impl ResultBus {
             return EnqueueOutcome::Duplicate;
         }
 
-        match redis::cmd("XADD")
-            .arg("judge:jobs")
+        let mut xadd = redis::cmd("XADD");
+        xadd.arg("judge:jobs");
+        let maxlen = stream_maxlen();
+        if maxlen > 0 {
+            // MAXLEN ~ N: bound the queue so finished-but-unremoved entries can never fill Redis.
+            xadd.arg("MAXLEN").arg("~").arg(maxlen);
+        }
+        match xadd
             .arg("*")
             .arg("job")
             .arg(&job_json)
