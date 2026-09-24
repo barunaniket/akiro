@@ -1,0 +1,57 @@
+name: ci
+
+# Fast, unprivileged Rust gate. Runs on every push/PR.
+# The kernel-level isolation guarantees (cgroups/seccomp/namespaces) CANNOT run in
+# this unprivileged environment — they are verified by security-regression.yml, which
+# boots the real container. The 6 sandbox tests that need root are #[ignore]d here.
+
+on:
+  push:
+    branches: [ main, 'hardening/**' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    name: build + test (blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      # ── Blocking gates: the build must compile and the unit tests must pass. ──
+      # --locked fails if Cargo.lock is stale, keeping builds reproducible.
+      - name: Build (locked)
+        run: cargo build --locked --all-targets
+      - name: Test (locked)
+        run: cargo test --locked
+
+      # ── Informational (non-blocking): surfaced but do not fail the build. ──
+      # fmt: the codebase is not rustfmt-normalized (deliberate, comment-dense style).
+      # clippy: 24 lints, most in intentional FFI code — not auto-fixed on purpose.
+      - name: Format check (informational)
+        run: cargo fmt --check
+        continue-on-error: true
+      - name: Clippy (informational)
+        run: cargo clippy --all-targets
+        continue-on-error: true
+
+  audit:
+    name: cargo audit (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit dependencies
+        run: cargo audit

@@ -1,0 +1,46 @@
+name: security-regression
+
+# Boots the real container and asserts the isolation & API guarantees
+# (network severed, filesystem jailed, fork/mem/output/cpu abuse classified, judge
+# never crashes, API rejects malformed/oversized/unauthorized requests).
+#
+# Scoped deliberately so it does NOT tax every push (the image bundles ~18 language
+# toolchains and takes a while to build). It runs only when the isolation-relevant
+# code changes, on demand, and weekly.
+#
+# NOTE: this needs a --privileged container with working cgroup v2 delegation. GitHub-
+# hosted ubuntu runners support this today; if a runner environment ever rejects the
+# delegation, the entrypoint fails closed (jobs rejected) and this job will surface it.
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/sandbox/**'
+      - 'src/orchestrator/**'
+      - 'Dockerfile'
+      - 'entrypoint.sh'
+      - 'scripts/security_regression.sh'
+      - '.github/workflows/security-regression.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+
+jobs:
+  isolation:
+    name: container isolation test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build image (amd64, load locally)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: akiro:sectest
+      - name: Run security regression
+        run: |
+          chmod +x scripts/security_regression.sh
+          scripts/security_regression.sh akiro:sectest 2 1g
