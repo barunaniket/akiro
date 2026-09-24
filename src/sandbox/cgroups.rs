@@ -275,6 +275,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires root + cgroup v2 delegation; real isolation is covered by scripts/security_regression.sh"]
     fn test_cgroup_manager_new() {
         let config = SandboxConfig::new(std::path::PathBuf::from("/bin/echo"));
         let manager = CgroupManager::new(&config);

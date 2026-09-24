@@ -246,6 +246,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[tokio::test]
+    #[ignore = "requires root + cgroup v2 delegation; real isolation is covered by scripts/security_regression.sh"]
     async fn test_simple_echo() {
         let config = SandboxConfig::new(PathBuf::from("/bin/echo"))
             .with_args(vec!["Hello World".to_string()])
@@ -258,6 +259,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires root + cgroup v2 delegation; real isolation is covered by scripts/security_regression.sh"]
     async fn test_time_limit_exceeded() {
         let config = SandboxConfig::new(PathBuf::from("/bin/sleep"))
             .with_args(vec!["10".to_string()])
@@ -268,6 +270,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires root + cgroup v2 delegation; real isolation is covered by scripts/security_regression.sh"]
     async fn test_output_limit() {
         let config = SandboxConfig::new(PathBuf::from("/bin/dd"))
             .with_args(vec![
@@ -286,6 +289,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires root + cgroup v2 delegation; real isolation is covered by scripts/security_regression.sh"]
     async fn test_exit_code() {
         let config = SandboxConfig::new(PathBuf::from("/bin/sh"))
             .with_args(vec!["-c".to_string(), "exit 42".to_string()])
@@ -296,6 +300,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires root + cgroup v2 delegation; real isolation is covered by scripts/security_regression.sh"]
     async fn test_stdin() {
         let config = SandboxConfig::new(PathBuf::from("/bin/cat"))
             .with_stdin(b"test input\n".to_vec())
