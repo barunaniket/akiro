@@ -6,6 +6,10 @@
 #
 # Optional positional args:  <CLUSTER_TOKEN> [HOST] [PORT]
 # Optional env override:     AKIRO_IMAGE=<image>  AKIRO_WORKERS=<n>  AKIRO_BUDGET=<e.g. 12g>
+#                            AKIRO_REDIS_SCHEME=redis   (plain TCP, e.g. through your own tunnel)
+#
+# Connects over TLS (rediss://) to the leader's stunnel front on :6380, so the token and the
+# submissions it carries are encrypted in transit.
 #
 # Auto-detects cores + RAM and tunes the worker for this machine. Idempotent:
 # re-running replaces the existing worker.
@@ -13,8 +17,9 @@
 set -euo pipefail
 
 TOKEN="${1:-${CLUSTER_TOKEN:-}}"
-HOST="${2:-20.219.186.217}"
-PORT="${3:-6379}"
+HOST="${2:-172-198-71-80.sslip.io}"
+PORT="${3:-6380}"
+SCHEME="${AKIRO_REDIS_SCHEME:-rediss}"
 IMAGE="${AKIRO_IMAGE:-ghcr.io/barunaniket/akiro:latest}"
 NAME="akiro-worker"
 
@@ -47,12 +52,12 @@ fi
 say "Pulling worker image ($IMAGE)…"
 docker pull "$IMAGE" || docker image inspect "$IMAGE" >/dev/null 2>&1 || die "Could not pull $IMAGE and no local copy found."
 
-say "Starting worker → $HOST:$PORT   (${WORKERS} workers, ${BUDGET} memory budget)"
+say "Starting worker → ${SCHEME}://${HOST}:${PORT}   (${WORKERS} workers, ${BUDGET} memory budget)"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --privileged --restart unless-stopped \
   -e ENABLE_EMBEDDED_REDIS=false \
   -e JUDGE_MEM_BUDGET_BYTES="$BUDGET" \
-  "$IMAGE" --mode worker --redis "redis://:${TOKEN}@${HOST}:${PORT}" --workers "$WORKERS" >/dev/null
+  "$IMAGE" --mode worker --redis "${SCHEME}://:${TOKEN}@${HOST}:${PORT}" --workers "$WORKERS" >/dev/null
 
 # 3. Confirm connection.
 sleep 4

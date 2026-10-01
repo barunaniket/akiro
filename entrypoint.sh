@@ -78,6 +78,22 @@ iptables -A OUTPUT -d 169.254.169.254 -j DROP 2>/dev/null || true
 # exits; this only mops up crash leftovers so /tmp doesn't accrete empty directories.
 rm -rf /tmp/judge_root_* 2>/dev/null || true
 
+# Worker nodes consume a remote leader's Redis, so they need no embedded broker, and they
+# should size the admission budget to THIS machine rather than the 1 GB-leader default (at
+# 768m a 16-core box runs ~2 jobs at a time). This is what lets a machine join the cluster
+# with a single `docker run ... --mode worker --redis <url>` and no extra -e flags.
+case " $* " in
+    *" --mode worker "*|*" --mode=worker "*) IS_WORKER=true ;;
+    *) if [ "${JUDGE_MODE:-}" = "worker" ]; then IS_WORKER=true; else IS_WORKER=false; fi ;;
+esac
+if [ "$IS_WORKER" = "true" ]; then
+    : "${ENABLE_EMBEDDED_REDIS:=false}"
+    if [ -z "${JUDGE_MEM_BUDGET_BYTES:-}" ]; then
+        _mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+        export JUDGE_MEM_BUDGET_BYTES="$(( _mem_kb * 3 / 4 / 1024 ))m"
+    fi
+fi
+
 # Start embedded Redis daemon if enabled (default: true)
 ENABLE_REDIS="${ENABLE_EMBEDDED_REDIS:-true}"
 if [ "$ENABLE_REDIS" = "true" ]; then
@@ -109,10 +125,11 @@ fi
 
 echo "----------------------------------------------"
 echo " Akiro Sandbox starting..."
-echo " Mode:    ${JUDGE_MODE:-all}"
+if [ "$IS_WORKER" = "true" ]; then echo " Mode:    worker"; else echo " Mode:    ${JUDGE_MODE:-all}"; fi
 echo " Port:    ${JUDGE_PORT:-8080}"
 echo " Workers: ${JUDGE_WORKERS:-auto}"
-echo " Redis:   ${JUDGE_REDIS:-none}"
+# Mask the password: JUDGE_REDIS embeds CLUSTER_TOKEN, and this banner lands in `docker logs`.
+echo " Redis:   $(printf '%s' "${JUDGE_REDIS:-none}" | sed 's#://[^@]*@#://***@#')"
 echo " Memory:  budget ${JUDGE_MEM_BUDGET_BYTES:-768m} · job≤${JUDGE_MAX_MEMORY_BYTES:-512m} · compile≤${JUDGE_COMPILE_MEMORY_BYTES:-512m}"
 echo "----------------------------------------------"
 

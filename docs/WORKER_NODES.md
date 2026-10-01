@@ -9,15 +9,25 @@ During a contest you scale execution capacity simply by **connecting more worker
 
 ---
 
-## ⚡ One-Line Join
+## ⚡ One-Line Join (Linux, macOS, Windows)
 
-On any machine you want to add as a worker:
+With Docker installed and running (Docker Engine on Linux, Docker Desktop on macOS/Windows), run this **one line** — identical in a Linux shell, macOS Terminal, Windows PowerShell or `cmd`:
+
+```bash
+docker run -d --name akiro-worker --privileged --restart unless-stopped --pull always ghcr.io/barunaniket/akiro --mode worker --redis rediss://:<CLUSTER_TOKEN>@172-198-71-80.sslip.io:6380
+```
+
+Replace `<CLUSTER_TOKEN>` with the cluster token. That's the whole setup:
+
+- `rediss://` connects over **TLS** to the leader's Redis front on `:6380`, so the token and the submissions it carries are encrypted in transit.
+- Worker mode auto-tunes to the machine: one job slot per CPU core, a memory budget of ~75% of RAM (on macOS/Windows that is the RAM given to Docker Desktop — raise it in Docker Desktop → Settings → Resources), and no embedded Redis.
+- `--pull always` fetches the right image for the CPU (amd64, or arm64 on Apple Silicon); `--restart unless-stopped` rejoins after reboots and network drops.
+
+On Linux there is also a script that installs Docker first if it's missing:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/barunaniket/akiro/main/scripts/join-worker.sh | bash -s -- <CLUSTER_TOKEN>
 ```
-
-Replace `<CLUSTER_TOKEN>` with the cluster token. That's the whole setup.
 
 The script:
 
@@ -78,8 +88,9 @@ AKIRO_WORKERS=8 AKIRO_BUDGET=12g AKIRO_IMAGE=ghcr.io/barunaniket/akiro:latest \
 | Variable | Default | Meaning |
 | :--- | :--- | :--- |
 | `<CLUSTER_TOKEN>` (arg 1) | *(required)* | Cluster token; authenticates to the leader's Redis. |
-| `<HOST>` (arg 2) | leader IP | Leader host the worker connects to. |
-| `<PORT>` (arg 3) | `6379` | Leader Redis port. |
+| `<HOST>` (arg 2) | `172-198-71-80.sslip.io` | Leader host the worker connects to (must match the TLS certificate). |
+| `<PORT>` (arg 3) | `6380` | Leader's TLS Redis front (stunnel → Redis `6379`). |
+| `AKIRO_REDIS_SCHEME` | `rediss` | `redis` for plain TCP, e.g. through your own SSH tunnel. |
 | `AKIRO_WORKERS` | `nproc` | Concurrent job slots (≈ cores). |
 | `AKIRO_BUDGET` | ~75% RAM | `JUDGE_MEM_BUDGET_BYTES` — gates how many sandboxes run at once. Set close to available RAM to use all cores. |
 | `AKIRO_IMAGE` | GHCR `:latest` | Worker image to run. |
@@ -88,10 +99,11 @@ AKIRO_WORKERS=8 AKIRO_BUDGET=12g AKIRO_IMAGE=ghcr.io/barunaniket/akiro:latest \
 
 ## 🔒 Security Notes
 
-- **The token is a shared secret.** Anyone holding it can join as a worker, which means they can **receive and read submitted source code** and publish results. Treat it like a password.
+- **The token is a shared secret.** Anyone holding it can join as a worker, which means they can **receive and read submitted source code** and **publish results — including forged verdicts**. Treat it like a password and only give it to machines you trust.
 - **The token appears on the command line** (shell history, process list). Acceptable for trusted organiser machines; **rotate `CLUSTER_TOKEN` after each event.**
 - **`curl | bash` runs code as root** (the worker needs a privileged container for sandbox isolation). Only run it on machines you control — don't hand this line to untrusted participants.
-- **Lock down the leader's Redis port** (e.g. an Azure NSG rule restricting `6379` to known worker IPs). The token protects the broker, but it should not be openly reachable by the whole internet.
+- **Expose only the TLS front.** Open `6380` (stunnel, TLS) in the Azure NSG — never the plaintext Redis port `6379`, which stays bound to the VM's localhost. If your workers have fixed IPs, restrict `6380` to them; the token protects the broker either way.
+- **Timing differs between machines.** The same submission runs faster on a fast laptop than on the leader VM, so a solution near the time limit can pass on one worker and TLE on another. Use generous limits, or join machines of similar speed.
 
 ---
 

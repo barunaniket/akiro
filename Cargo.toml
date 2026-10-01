@@ -26,7 +26,7 @@ async-trait = "0.1"
 axum = { version = "0.7", features = ["ws", "macros"] }
 tower = { version = "0.4", features = ["util", "timeout"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
-redis = { version = "0.25", features = ["tokio-comp", "streams", "connection-manager"] }
+redis = { version = "0.25", features = ["tokio-comp", "streams", "connection-manager", "tokio-rustls-comp", "tls-rustls-webpki-roots"] }
 futures-util = "0.3"
 tokio-stream = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
