@@ -53,23 +53,23 @@ fn get_cluster_stats(
                 .arg("judge_workers")
                 .query(&mut con);
 
-            if let Ok(redis::Value::Bulk(consumers)) = res {
+            if let Ok(redis::Value::Array(consumers)) = res {
                 let mut total = 0;
                 let mut total_pending = 0;
 
                 for item in consumers {
-                    if let redis::Value::Bulk(fields) = item {
+                    if let redis::Value::Array(fields) = item {
                         let mut name = String::new();
                         let mut idle_ms: i64 = 0;
                         let mut pending: usize = 0;
 
                         let mut iter = fields.into_iter();
                         while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
-                            if let redis::Value::Data(k_bytes) = k {
+                            if let redis::Value::BulkString(k_bytes) = k {
                                 let k_str = String::from_utf8_lossy(&k_bytes);
                                 match k_str.as_ref() {
                                     "name" => {
-                                        if let redis::Value::Data(v_bytes) = v {
+                                        if let redis::Value::BulkString(v_bytes) = v {
                                             name = String::from_utf8_lossy(&v_bytes).to_string();
                                         }
                                     }

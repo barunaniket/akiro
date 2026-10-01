@@ -152,16 +152,16 @@ impl RedisConsumer {
                 .await;
 
             match read_cmd {
-                Ok(redis::Value::Bulk(keys)) => {
+                Ok(redis::Value::Array(keys)) => {
                     for key_item in keys {
-                        if let redis::Value::Bulk(key_fields) = key_item {
+                        if let redis::Value::Array(key_fields) = key_item {
                             if key_fields.len() >= 2 {
-                                if let redis::Value::Bulk(messages) = &key_fields[1] {
+                                if let redis::Value::Array(messages) = &key_fields[1] {
                                     for msg in messages {
-                                        if let redis::Value::Bulk(msg_data) = msg {
+                                        if let redis::Value::Array(msg_data) = msg {
                                             if msg_data.len() >= 2 {
                                                 let msg_id = match &msg_data[0] {
-                                                    redis::Value::Data(id_bytes) => String::from_utf8_lossy(id_bytes).to_string(),
+                                                    redis::Value::BulkString(id_bytes) => String::from_utf8_lossy(id_bytes).to_string(),
                                                     _ => continue,
                                                 };
 
@@ -235,10 +235,10 @@ impl RedisConsumer {
 
     /// Pull the `job` field's value out of an XREADGROUP/XAUTOCLAIM message's field-value bulk.
     fn extract_job_field(fields: &redis::Value) -> Option<String> {
-        if let redis::Value::Bulk(kvs) = fields {
+        if let redis::Value::Array(kvs) = fields {
             let mut iter = kvs.iter();
             while let (Some(k), Some(v)) = (iter.next(), iter.next()) {
-                if let (redis::Value::Data(k_bytes), redis::Value::Data(v_bytes)) = (k, v) {
+                if let (redis::Value::BulkString(k_bytes), redis::Value::BulkString(v_bytes)) = (k, v) {
                     if String::from_utf8_lossy(k_bytes) == "job" {
                         return Some(String::from_utf8_lossy(v_bytes).to_string());
                     }
@@ -450,7 +450,7 @@ impl RedisConsumer {
                 .await;
 
             let items = match reply {
-                Ok(redis::Value::Bulk(items)) if items.len() >= 2 => items,
+                Ok(redis::Value::Array(items)) if items.len() >= 2 => items,
                 Ok(_) => { cursor = "0-0".to_string(); continue; }
                 Err(e) => {
                     tracing::warn!("XAUTOCLAIM sweep failed: {}. Reconnecting...", e);
@@ -466,23 +466,23 @@ impl RedisConsumer {
             // (items[2], if present, is IDs already deleted from the stream — XAUTOCLAIM has
             //  removed those from the PEL for us, so no action needed.)
             cursor = match &items[0] {
-                redis::Value::Data(b) => String::from_utf8_lossy(b).to_string(),
+                redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
                 _ => "0-0".to_string(),
             };
 
             let messages = match &items[1] {
-                redis::Value::Bulk(m) => m,
+                redis::Value::Array(m) => m,
                 _ => continue,
             };
 
             let mut reclaimed = 0usize;
             for msg in messages {
                 let msg_data = match msg {
-                    redis::Value::Bulk(d) if d.len() >= 2 => d,
+                    redis::Value::Array(d) if d.len() >= 2 => d,
                     _ => continue,
                 };
                 let msg_id = match &msg_data[0] {
-                    redis::Value::Data(b) => String::from_utf8_lossy(b).to_string(),
+                    redis::Value::BulkString(b) => String::from_utf8_lossy(b).to_string(),
                     _ => continue,
                 };
 

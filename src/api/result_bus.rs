@@ -128,7 +128,7 @@ impl ResultBus {
         let key = format!("judge:pending:{}", job_id);
         redis::cmd("EXISTS")
             .arg(&key)
-            .query_async::<_, bool>(&mut con)
+            .query_async::<bool>(&mut con)
             .await
             .unwrap_or(false)
     }
@@ -181,7 +181,7 @@ impl ResultBus {
             .arg("*")
             .arg("job")
             .arg(&job_json)
-            .query_async::<_, String>(&mut con)
+            .query_async::<String>(&mut con)
             .await
         {
             Ok(_) => EnqueueOutcome::Queued,
