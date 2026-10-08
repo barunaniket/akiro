@@ -14,12 +14,12 @@ During a contest you scale execution capacity simply by **connecting more worker
 With Docker installed and running (Docker Engine on Linux, Docker Desktop on macOS/Windows), run this **one line** — identical in a Linux shell, macOS Terminal, Windows PowerShell or `cmd`:
 
 ```bash
-docker run -d --name akiro-worker --privileged --restart unless-stopped --pull always ghcr.io/barunaniket/akiro --mode worker --redis rediss://:<CLUSTER_TOKEN>@172-198-71-80.sslip.io:6380
+docker run -d --name akiro-worker --privileged --restart unless-stopped --pull always ghcr.io/barunaniket/akiro:latest --mode worker --redis rediss://:<CLUSTER_TOKEN>@redis.172-198-71-80.sslip.io:443
 ```
 
 Replace `<CLUSTER_TOKEN>` with the cluster token. That's the whole setup:
 
-- `rediss://` connects over **TLS** to the leader's Redis front on `:6380`, so the token and the submissions it carries are encrypted in transit.
+- `rediss://` connects over **TLS on standard port 443** (`redis.172-198-71-80.sslip.io:443`), bypassing strict university/corporate firewall port restrictions while keeping all communications encrypted in transit.
 - Worker mode auto-tunes to the machine: one job slot per CPU core, a memory budget of ~75% of RAM (on macOS/Windows that is the RAM given to Docker Desktop — raise it in Docker Desktop → Settings → Resources), and no embedded Redis.
 - `--pull always` fetches the right image for the CPU (amd64, or arm64 on Apple Silicon); `--restart unless-stopped` rejoins after reboots and network drops.
 

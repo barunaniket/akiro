@@ -17,8 +17,8 @@
 set -euo pipefail
 
 TOKEN="${1:-${CLUSTER_TOKEN:-}}"
-HOST="${2:-172-198-71-80.sslip.io}"
-PORT="${3:-6380}"
+HOST="${2:-redis.172-198-71-80.sslip.io}"
+PORT="${3:-443}"
 SCHEME="${AKIRO_REDIS_SCHEME:-rediss}"
 IMAGE="${AKIRO_IMAGE:-ghcr.io/barunaniket/akiro:latest}"
 NAME="akiro-worker"
